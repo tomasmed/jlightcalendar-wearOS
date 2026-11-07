@@ -1,0 +1,16 @@
+---
+description: Universal agent operational instructions and project standards
+globs: *
+alwaysApply: true
+---
+
+# Agent Operating Rules
+
+This project strictly adheres to the standards defined in the root [AGENTS.md](../../AGENTS.md).
+
+Key Directives:
+1. Always run `./scripts/verify.ps1` (or `./scripts/verify.sh`) before marking any task as complete.
+2. Read `specs/active/` before implementing complex features.
+3. Review `docs/adr/` before introducing new dependencies or patterns.
+4. Follow conventional commit format (`feat:`, `fix:`, `refactor:`, `test:`).
+5. For PR reviews, follow the evaluation rules in `.agents/pr-reviewer.md`.
