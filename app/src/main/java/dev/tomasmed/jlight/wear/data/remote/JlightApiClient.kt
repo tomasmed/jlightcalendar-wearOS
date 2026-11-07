@@ -21,6 +21,13 @@ import io.ktor.http.contentType
 import io.ktor.serialization.kotlinx.json.json
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.booleanOrNull
+import kotlinx.serialization.json.decodeFromJsonElement
+import kotlinx.serialization.json.jsonPrimitive
 import java.time.LocalDate
 import java.time.LocalTime
 
@@ -34,49 +41,95 @@ data class AgentConnectRequestDto(
 
 @Serializable
 data class AgentConnectResponseDto(
-    val status: String,
+    val status: String = "pending",
     val deviceCode: String? = null,
+    val userCode: String? = null,
+    val verificationUri: String? = null,
     val claimUrl: String? = null,
+    val expiresIn: Int? = null,
+    val interval: Int? = null,
     val expiresAt: String? = null,
     val token: String? = null,
     val galaxyId: String? = null,
-)
+    val galaxyName: String? = null,
+    val memberId: String? = null,
+    val boundMember: String? = null,
+) {
+    val resolvedClaimUrl: String?
+        get() = verificationUri ?: claimUrl
+}
 
 @Serializable
 data class RemoteEventDto(
     val id: String,
     val galaxyId: String = "default",
     val title: String,
-    val date: String,
+    val date: String? = null,
     val time: String? = null,
+    val startTime: String? = null,
     val endDate: String? = null,
     val endTime: String? = null,
+    val isAllDay: Boolean = false,
     val memberId: String? = null,
-    val memberIds: List<String>? = null,
+    val memberIds: JsonElement? = null,
     val rrule: String? = null,
-    val exdates: List<String>? = null,
+    val exdates: JsonElement? = null,
     val location: String? = null,
     val description: String? = null,
 ) {
-    fun toDomain(): CalendarEvent {
+    fun toDomain(json: Json = Json): CalendarEvent {
+        val parsedMemberIds = parseStringListElement(memberIds, json)
         val resolvedMembers = when {
-            !memberIds.isNullOrEmpty() -> memberIds
+            parsedMemberIds.isNotEmpty() -> parsedMemberIds
             !memberId.isNullOrBlank() -> listOf(memberId)
             else -> listOf("Everyone")
         }
+
+        val resolvedDate = when {
+            !date.isNullOrBlank() -> LocalDate.parse(date.trim().take(10))
+            !startTime.isNullOrBlank() -> LocalDate.parse(startTime.trim().take(10))
+            else -> error("Event '$id' is missing both 'date' and 'startTime'")
+        }
+
+        val resolvedStartTime = if (isAllDay) {
+            null
+        } else {
+            when {
+                !time.isNullOrBlank() -> parseWallClockTime(time)
+                !startTime.isNullOrBlank() && startTime.contains('T') -> parseWallClockTime(startTime.substringAfter('T'))
+                else -> null
+            }
+        }
+
+        val resolvedEndDate = endDate?.takeIf { it.isNotBlank() }?.let { raw ->
+            runCatching { LocalDate.parse(raw.trim().take(10)) }.getOrNull()
+        } ?: endTime?.takeIf { it.isNotBlank() && it.contains('T') }?.let { raw ->
+            runCatching { LocalDate.parse(raw.trim().substringBefore('T')) }.getOrNull()
+        }
+
+        val resolvedEndTime = if (isAllDay) {
+            null
+        } else {
+            endTime?.takeIf { it.isNotBlank() }?.let { raw ->
+                parseWallClockTime(if (raw.contains('T')) raw.substringAfter('T') else raw)
+            }
+        }
+
+        val parsedExdates = parseStringListElement(exdates, json)
+            .mapNotNull { raw -> runCatching { LocalDate.parse(raw.trim().take(10)) }.getOrNull() }
+            .toSet()
+
         return CalendarEvent(
             id = id,
             galaxyId = galaxyId,
             title = title,
-            date = LocalDate.parse(date),
-            time = time?.takeIf { it.isNotBlank() }?.let { LocalTime.parse(it) },
-            endDate = endDate?.takeIf { it.isNotBlank() }?.let { LocalDate.parse(it) },
-            endTime = endTime?.takeIf { it.isNotBlank() }?.let { LocalTime.parse(it) },
+            date = resolvedDate,
+            time = resolvedStartTime,
+            endDate = resolvedEndDate,
+            endTime = resolvedEndTime,
             memberIds = resolvedMembers,
             rrule = rrule,
-            exdates = exdates.orEmpty().mapNotNull { raw ->
-                runCatching { LocalDate.parse(raw.trim()) }.getOrNull()
-            }.toSet(),
+            exdates = parsedExdates,
             location = location,
             description = description,
         )
@@ -90,20 +143,30 @@ data class RemoteChoreDto(
     val title: String,
     val memberId: String = "Everyone",
     val completed: Boolean = false,
-    val stars: Int = 1,
+    val points: Int? = null,
+    val stars: Int? = null,
+    val recurrenceType: String? = null,
     val frequency: String = "daily",
 ) {
-    fun toDomain(): ChoreItem =
+    fun toDomain(fallbackGalaxyId: String = galaxyId): ChoreItem =
         ChoreItem(
             id = id,
-            galaxyId = galaxyId,
+            galaxyId = if (galaxyId == "default") fallbackGalaxyId else galaxyId,
             title = title,
             memberId = memberId,
             completed = completed,
-            stars = stars,
-            frequency = frequency,
+            stars = points ?: stars ?: 1,
+            frequency = recurrenceType ?: frequency,
         )
 }
+
+@Serializable
+data class ToggleChoreRequestDto(
+    val choreId: String,
+    val id: String = choreId,
+    val completed: Boolean,
+    val date: String,
+)
 
 @Serializable
 data class ToggleCompletedRequestDto(
@@ -115,18 +178,54 @@ data class ToggleCompletedRequestDto(
 data class RemoteListItemDto(
     val id: String,
     val galaxyId: String = "default",
-    val text: String,
+    val title: String? = null,
+    val text: String? = null,
     val completed: Boolean = false,
     val category: String = "General",
 ) {
-    fun toDomain(): SharedListItem =
+    fun toDomain(fallbackGalaxyId: String = galaxyId): SharedListItem =
         SharedListItem(
             id = id,
-            galaxyId = galaxyId,
-            text = text,
+            galaxyId = if (galaxyId == "default") fallbackGalaxyId else galaxyId,
+            text = (title ?: text).orEmpty(),
             completed = completed,
             category = category,
         )
+}
+
+private fun parseWallClockTime(raw: String): LocalTime? =
+    runCatching {
+        val cleaned = raw.trim().removeSuffix("Z").substringBefore('+').let { value ->
+            // Strip trailing timezone offset like -05:00 if present after HH:mm:ss
+            if (value.count { it == ':' } >= 2 && value.contains('-')) value.substringBefore('-') else value
+        }
+        LocalTime.parse(cleaned)
+    }.getOrNull()
+
+private fun parseStringListElement(
+    element: JsonElement?,
+    json: Json,
+): List<String> {
+    if (element == null) return emptyList()
+    return when (element) {
+        is JsonArray -> element.mapNotNull { item ->
+            (item as? JsonPrimitive)?.content?.trim()?.takeIf { it.isNotEmpty() }
+        }
+        is JsonPrimitive -> {
+            val raw = element.content.trim()
+            if (raw.isEmpty() || raw.equals("null", ignoreCase = true)) {
+                emptyList()
+            } else if (raw.startsWith("[") && raw.endsWith("]")) {
+                runCatching { json.decodeFromString<List<String>>(raw) }
+                    .getOrDefault(emptyList())
+                    .map { it.trim() }
+                    .filter { it.isNotEmpty() }
+            } else {
+                raw.split(",").map { it.trim() }.filter { it.isNotEmpty() }
+            }
+        }
+        else -> emptyList()
+    }
 }
 
 /**
@@ -159,6 +258,23 @@ class JlightApiClient(
         }.body()
     }
 
+    suspend fun joinWithGalaxyCode(
+        baseUrl: String,
+        joinCode: String,
+        agentName: String = "Galaxy Watch",
+    ): AgentConnectResponseDto {
+        val cleanBase = baseUrl.trimEnd('/')
+        return httpClient.post("$cleanBase/api/agent/connect") {
+            contentType(ContentType.Application.Json)
+            setBody(
+                AgentConnectRequestDto(
+                    agentName = agentName,
+                    joinCode = joinCode.trim(),
+                ),
+            )
+        }.body()
+    }
+
     suspend fun pollDeviceCodeStatus(
         baseUrl: String,
         deviceCode: String,
@@ -171,41 +287,83 @@ class JlightApiClient(
 
     suspend fun fetchEvents(): List<CalendarEvent> {
         val creds = requireNotNull(tokenStore.getCredentials()) { "Watch is not paired with a JlightCalendar galaxy." }
-        val dtos: List<RemoteEventDto> = httpClient.get("${creds.baseUrl}/api/events") {
+        val root: JsonElement = httpClient.get("${creds.baseUrl}/api/events") {
             header(HttpHeaders.Authorization, "Bearer ${creds.agentPat}")
             parameter("galaxyId", creds.galaxyId)
         }.body()
-        return dtos.map { it.toDomain() }
+        val arrayElement = when (root) {
+            is JsonObject -> root["events"] ?: JsonArray(emptyList())
+            is JsonArray -> root
+            else -> JsonArray(emptyList())
+        }
+        val dtos = jsonSerializer.decodeFromJsonElement<List<RemoteEventDto>>(arrayElement)
+        return dtos.map { it.toDomain(jsonSerializer) }
     }
 
     suspend fun fetchChores(): List<ChoreItem> {
         val creds = requireNotNull(tokenStore.getCredentials()) { "Watch is not paired with a JlightCalendar galaxy." }
-        val dtos: List<RemoteChoreDto> = httpClient.get("${creds.baseUrl}/api/chores") {
+        val root: JsonElement = httpClient.get("${creds.baseUrl}/api/chores") {
             header(HttpHeaders.Authorization, "Bearer ${creds.agentPat}")
             parameter("galaxyId", creds.galaxyId)
         }.body()
-        return dtos.map { it.toDomain() }
+        val arrayElement = when (root) {
+            is JsonObject -> root["chores"] ?: JsonArray(emptyList())
+            is JsonArray -> root
+            else -> JsonArray(emptyList())
+        }
+        val dtos = jsonSerializer.decodeFromJsonElement<List<RemoteChoreDto>>(arrayElement)
+        return dtos.map { it.toDomain(fallbackGalaxyId = creds.galaxyId) }
     }
 
     suspend fun toggleChore(
         choreId: String,
         completed: Boolean,
-    ): ChoreItem {
+        date: LocalDate = LocalDate.now(),
+    ): Boolean {
         val creds = requireNotNull(tokenStore.getCredentials()) { "Watch is not paired with a JlightCalendar galaxy." }
-        val dto: RemoteChoreDto = httpClient.patch("${creds.baseUrl}/api/chores") {
+        val root: JsonElement = httpClient.patch("${creds.baseUrl}/api/chores") {
             header(HttpHeaders.Authorization, "Bearer ${creds.agentPat}")
             contentType(ContentType.Application.Json)
-            setBody(ToggleCompletedRequestDto(id = choreId, completed = completed))
+            setBody(
+                ToggleChoreRequestDto(
+                    choreId = choreId,
+                    id = choreId,
+                    completed = completed,
+                    date = date.toString(),
+                ),
+            )
         }.body()
-        return dto.toDomain()
+        if (root is JsonObject) {
+            root["completed"]?.jsonPrimitive?.booleanOrNull?.let { return it }
+        }
+        return completed
     }
 
     suspend fun fetchSharedLists(): List<SharedListItem> {
         val creds = requireNotNull(tokenStore.getCredentials()) { "Watch is not paired with a JlightCalendar galaxy." }
-        val dtos: List<RemoteListItemDto> = httpClient.get("${creds.baseUrl}/api/lists") {
+        val root: JsonElement = httpClient.get("${creds.baseUrl}/api/lists") {
             header(HttpHeaders.Authorization, "Bearer ${creds.agentPat}")
             parameter("galaxyId", creds.galaxyId)
         }.body()
-        return dtos.map { it.toDomain() }
+        val arrayElement = when (root) {
+            is JsonObject -> root["items"] ?: JsonArray(emptyList())
+            is JsonArray -> root
+            else -> JsonArray(emptyList())
+        }
+        val dtos = jsonSerializer.decodeFromJsonElement<List<RemoteListItemDto>>(arrayElement)
+        return dtos.map { it.toDomain(fallbackGalaxyId = creds.galaxyId) }
+    }
+
+    suspend fun toggleListItem(
+        itemId: String,
+        completed: Boolean,
+    ): Boolean {
+        val creds = requireNotNull(tokenStore.getCredentials()) { "Watch is not paired with a JlightCalendar galaxy." }
+        httpClient.patch("${creds.baseUrl}/api/lists") {
+            header(HttpHeaders.Authorization, "Bearer ${creds.agentPat}")
+            contentType(ContentType.Application.Json)
+            setBody(ToggleCompletedRequestDto(id = itemId, completed = completed))
+        }
+        return completed
     }
 }

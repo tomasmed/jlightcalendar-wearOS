@@ -31,5 +31,5 @@
 - [ ] Criterion 1: [Observable outcome]
 - [ ] Criterion 2: [Observable outcome]
 - [ ] Unit & integration tests added with genuine assertions.
-- [ ] `./scripts/verify.ps1` runs 100% green with zero errors or warnings.
+- [ ] `.\gradlew.bat check lintDebug assembleDebug` runs 100% green with zero errors or warnings.
 - [ ] Relevant documentation / ADR updated if new concepts were introduced.

@@ -5,7 +5,7 @@
 > **Rules for Coding Agents**:
 > 1. Execute tasks strictly in order.
 > 2. Follow TDD: write/update tests before marking task as complete.
-> 3. Verify each task with `./scripts/verify.ps1` before checking the box (`[x]`).
+> 3. Verify each task with `.\gradlew.bat check lintDebug` before checking the box (`[x]`).
 > 4. Do not proceed to Task N+1 if Task N fails verification.
 
 ---
@@ -27,7 +27,7 @@
   - *Verify*: All tests pass.
 
 ### Phase 3: Integration & Presentation
-- [ ] **Task 3.1**: Wire service into controller / UI / CLI entry point.
-  - *Verify*: Integration tests pass.
-- [ ] **Task 3.2**: Run full deterministic verification suite (`./scripts/verify.ps1`).
+- [ ] **Task 3.1**: Wire service into Wear Compose UI / Tile / Complication entry point.
+  - *Verify*: Unit tests & Android Lint pass.
+- [ ] **Task 3.2**: Run full deterministic verification suite (`.\gradlew.bat check lintDebug assembleDebug`).
   - *Verify*: All linters, type checks, and tests are 100% green.

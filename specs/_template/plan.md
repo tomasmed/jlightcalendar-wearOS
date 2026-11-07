@@ -15,12 +15,12 @@ Explain the design patterns, layer interactions, and data structures chosen.
 ## 2. Affected Files & Touchpoints
 
 ### New Files to Create:
-* `src/domain/...` - [Reason]
-* `src/services/...` - [Reason]
-* `tests/...` - [Reason]
+* `app/src/main/java/dev/tomasmed/jlight/wear/domain/...` - [Reason]
+* `app/src/main/java/dev/tomasmed/jlight/wear/data/...` - [Reason]
+* `app/src/test/java/dev/tomasmed/jlight/wear/...` - [Reason]
 
 ### Existing Files to Modify:
-* `src/...` - [Describe intended change]
+* `app/src/main/java/dev/tomasmed/jlight/wear/...` - [Describe intended change]
 
 ---
 

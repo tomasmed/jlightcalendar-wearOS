@@ -68,12 +68,12 @@ The watch communicates with the following `JlightCalendar` endpoints:
 
 | Watch Capability | Method & Endpoint | Auth Required | Request / Query Payload | Response Summary |
 | :--- | :--- | :--- | :--- | :--- |
-| **Start QR Pairing** | `POST /api/agent/connect` | Public | `{ "agentName": "Galaxy Watch", "rune": "⌚", "requestedScope": "standard" }` | `202 Accepted`: `{ "deviceCode": "BOT-XXXX-XXXX", "claimUrl": "/?claimBot=...", "expiresAt": "..." }` |
-| **Poll QR Pairing** | `GET /api/agent/connect?deviceCode=...` | Public | Query param `deviceCode` | `{ "status": "pending" \| "approved", "token": "jlight_ag_...", "galaxyId": "..." }` |
-| **Direct Join Code** | `POST /api/agent/connect` | Public | `{ "joinCode": "GLX-XXXXX", "agentName": "Galaxy Watch", "rune": "⌚" }` | `201 Created`: `{ "status": "approved", "token": "jlight_ag_...", "galaxyId": "..." }` |
-| **Fetch Events** | `GET /api/events?galaxyId=...` | `Bearer jlight_ag_...` | Query param `galaxyId` | Array of master & single events (`id`, `title`, `date`, `time`, `endDate`, `endTime`, `rrule`, `exdates`, `memberIds`) |
-| **Create Quick Event** | `POST /api/events` | `Bearer jlight_ag_...` | `{ "galaxyId", "title", "date", "time", "memberId": "Everyone" }` | `200 OK`: Created event record |
-| **Fetch Chores** | `GET /api/chores?galaxyId=...` | `Bearer jlight_ag_...` | Query param `galaxyId` | Array of chores (`id`, `title`, `memberId`, `completed`, `stars`, `frequency`) |
-| **Toggle Chore** | `PATCH /api/chores` | `Bearer jlight_ag_...` | `{ "id": "...", "completed": true }` | `200 OK`: Updated chore + member star increment |
-| **Fetch Shared Lists** | `GET /api/lists?galaxyId=...` | `Bearer jlight_ag_...` | Query param `galaxyId` | Array of list items (`id`, `text`, `completed`, `category`, `galaxyId`) |
-| **Toggle List Item** | `PATCH /api/lists` | `Bearer jlight_ag_...` | `{ "id": "...", "completed": true }` | `200 OK`: Updated list item |
+| **Start QR Pairing** | `POST /api/agent/connect` | Public | `{ "agentName": "Galaxy Watch", "rune": "⌚", "requestedScope": "standard" }` | `200 OK`: `{ "deviceCode": "...", "userCode": "BOT-XXXX-XXXX", "verificationUri": "https://.../?claimBot=...", "expiresIn": 900, "interval": 3 }` |
+| **Poll QR Pairing** | `GET /api/agent/connect?deviceCode=...` | Public | Query param `deviceCode` | `202/200`: `{ "status": "pending" \| "approved", "token": "jlight_ag_...", "galaxyId": "...", "memberId": "..." }` |
+| **Direct Join Code** | `POST /api/agent/connect` | Public | `{ "joinCode": "GLX-XXXX-XXXX", "agentName": "Galaxy Watch", "rune": "⌚" }` | `200 OK`: `{ "status": "approved", "token": "jlight_ag_...", "galaxyId": "...", "galaxyName": "...", "memberId": "..." }` |
+| **Fetch Events** | `GET /api/events?galaxyId=...` | `Bearer jlight_ag_...` | Query param `galaxyId` | `{ "events": [ { "id", "galaxyId", "title", "startTime", "endTime", "isAllDay", "rrule", "exdates", "memberId", "memberIds" } ] }` |
+| **Create Quick Event** | `POST /api/events` | `Bearer jlight_ag_...` | `{ "galaxyId", "title", "startTime", "endTime", "isAllDay": false }` | `200 OK`: `{ "success": true, "event": { ... } }` |
+| **Fetch Chores** | `GET /api/chores?galaxyId=...` | `Bearer jlight_ag_...` | Query param `galaxyId` (`&date=YYYY-MM-DD`) | `{ "chores": [ { "id", "title", "memberId", "completed", "points", "recurrenceType", "frequency" } ], "starBalances": {...}, "members": [...] }` |
+| **Toggle Chore** | `PATCH /api/chores` | `Bearer jlight_ag_...` | `{ "choreId": "...", "date": "YYYY-MM-DD" }` | `200 OK`: `{ "success": true, "completed": true, "starBalances": { ... } }` |
+| **Fetch Shared Lists** | `GET /api/lists?galaxyId=...` | `Bearer jlight_ag_...` | Query param `galaxyId` (`&type=grocery`) | `{ "items": [ { "id", "title", "completed", "category", "addedByMemberId" } ], "members": [...] }` |
+| **Toggle List Item** | `PATCH /api/lists` | `Bearer jlight_ag_...` | `{ "id": "...", "completed": true }` | `200 OK`: `{ "success": true }` |

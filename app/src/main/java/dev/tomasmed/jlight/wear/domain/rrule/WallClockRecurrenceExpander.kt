@@ -36,7 +36,7 @@ object WallClockRecurrenceExpander {
         windowEnd: LocalDate,
     ): List<EventOccurrence> {
         val rawRule = event.rrule?.trim().orEmpty()
-        if (rawRule.isEmpty()) {
+        if (rawRule.isEmpty() || rawRule.equals("NONE", ignoreCase = true)) {
             val fallsInWindow = !event.date.isBefore(windowStart) && !event.date.isAfter(windowEnd)
             val isExcluded = event.exdates.contains(event.date)
             if (!fallsInWindow || isExcluded) return emptyList()
@@ -69,14 +69,21 @@ object WallClockRecurrenceExpander {
 
             Frequency.WEEKLY -> {
                 val targetDays = parsed.byDay.ifEmpty { setOf(event.date.dayOfWeek) }
+                val effectiveWkst = parsed.wkst
+                    ?: if (event.date.dayOfWeek == DayOfWeek.SUNDAY && targetDays.size > 1) {
+                        DayOfWeek.SUNDAY
+                    } else {
+                        DayOfWeek.MONDAY
+                    }
+                val startWeekAnchor = startOfWeek(event.date, effectiveWkst)
                 var cursor = event.date
                 while (!cursor.isAfter(windowEnd) && iterations < MAX_SAFETY_ITERATIONS) {
                     iterations++
                     if (parsed.until != null && cursor.isAfter(parsed.until)) break
 
                     val weeksSinceStart = ChronoUnit.WEEKS.between(
-                        event.date.with(DayOfWeek.MONDAY),
-                        cursor.with(DayOfWeek.MONDAY),
+                        startWeekAnchor,
+                        startOfWeek(cursor, effectiveWkst),
                     )
                     if (weeksSinceStart >= 0 && weeksSinceStart % parsed.interval == 0L && targetDays.contains(cursor.dayOfWeek)) {
                         emittedTotalCount++
@@ -117,6 +124,14 @@ object WallClockRecurrenceExpander {
         return occurrences
     }
 
+    private fun startOfWeek(
+        date: LocalDate,
+        wkst: DayOfWeek,
+    ): LocalDate {
+        val diff = (date.dayOfWeek.value - wkst.value + 7) % 7
+        return date.minusDays(diff.toLong())
+    }
+
     private fun CalendarEvent.toOccurrence(
         occurrenceDate: LocalDate,
         isRecurring: Boolean,
@@ -145,32 +160,53 @@ object WallClockRecurrenceExpander {
         val byDay: Set<DayOfWeek>,
         val count: Int?,
         val until: LocalDate?,
+        val wkst: DayOfWeek? = null,
+    )
+
+    private val WEEKDAY_SET = setOf(
+        DayOfWeek.MONDAY,
+        DayOfWeek.TUESDAY,
+        DayOfWeek.WEDNESDAY,
+        DayOfWeek.THURSDAY,
+        DayOfWeek.FRIDAY,
     )
 
     private fun parseRRule(rrule: String): ParsedRRule? {
         val cleaned = rrule.removePrefix("RRULE:").trim()
         if (cleaned.isEmpty()) return null
 
+        when (cleaned.uppercase()) {
+            "DAILY" -> return ParsedRRule(Frequency.DAILY, interval = 1, byDay = emptySet(), count = null, until = null)
+            "WEEKDAY" -> return ParsedRRule(Frequency.WEEKLY, interval = 1, byDay = WEEKDAY_SET, count = null, until = null)
+            "WEEKLY" -> return ParsedRRule(Frequency.WEEKLY, interval = 1, byDay = emptySet(), count = null, until = null)
+            "BIWEEKLY" -> return ParsedRRule(Frequency.WEEKLY, interval = 2, byDay = emptySet(), count = null, until = null)
+            "MONTHLY" -> return ParsedRRule(Frequency.MONTHLY, interval = 1, byDay = emptySet(), count = null, until = null)
+        }
+
         val parts = cleaned.split(";").mapNotNull { token ->
             val idx = token.indexOf('=')
-            if (idx <= 0) null else token.substring(0, idx).uppercase() to token.substring(idx + 1).uppercase()
+            if (idx <= 0) null else token.substring(0, idx).trim().uppercase() to token.substring(idx + 1).trim().uppercase()
         }.toMap()
 
-        val freq = when (parts["FREQ"]) {
+        val rawFreq = parts["FREQ"] ?: return null
+        val freq = when (rawFreq) {
             "DAILY" -> Frequency.DAILY
-            "WEEKLY" -> Frequency.WEEKLY
+            "WEEKLY", "WEEKDAY", "BIWEEKLY" -> Frequency.WEEKLY
             "MONTHLY" -> Frequency.MONTHLY
             else -> return null
         }
 
-        val interval = parts["INTERVAL"]?.toIntOrNull()?.coerceAtLeast(1) ?: 1
+        val defaultInterval = if (rawFreq == "BIWEEKLY") 2 else 1
+        val interval = parts["INTERVAL"]?.toIntOrNull()?.coerceAtLeast(1) ?: defaultInterval
         val count = parts["COUNT"]?.toIntOrNull()?.coerceAtLeast(1)
         val until = parts["UNTIL"]?.let { parseUntilDate(it) }
-        val byDay = parts["BYDAY"]
+        val wkst = parts["WKST"]?.let { parseDayOfWeek(it) }
+        val parsedByDay = parts["BYDAY"]
             ?.split(",")
             ?.mapNotNull { code -> parseDayOfWeek(code.trim()) }
             ?.toSet()
             .orEmpty()
+        val byDay = if (rawFreq == "WEEKDAY" && parsedByDay.isEmpty()) WEEKDAY_SET else parsedByDay
 
         return ParsedRRule(
             freq = freq,
@@ -178,6 +214,7 @@ object WallClockRecurrenceExpander {
             byDay = byDay,
             count = count,
             until = until,
+            wkst = wkst,
         )
     }
 

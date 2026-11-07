@@ -166,4 +166,92 @@ class WallClockRecurrenceExpanderTest {
         )
         assertTrue(invertedWindowResult.isEmpty())
     }
+
+    @Test
+    fun `rrule NONE is treated as non-recurring and upstream shorthand frequencies expand`() {
+        val noneEvent = CalendarEvent(
+            id = "evt-none",
+            galaxyId = "galaxy-alpha",
+            title = "Dentist",
+            date = LocalDate.of(2026, 11, 4),
+            rrule = "NONE",
+        )
+        val shorthandWeekday = CalendarEvent(
+            id = "evt-weekday-short",
+            galaxyId = "galaxy-alpha",
+            title = "Morning Bus",
+            date = LocalDate.of(2026, 11, 5), // Thursday
+            rrule = "WEEKDAY",
+        )
+
+        val results = WallClockRecurrenceExpander.expandEventsInWindow(
+            events = listOf(noneEvent, shorthandWeekday),
+            windowStart = LocalDate.of(2026, 11, 4),
+            windowEnd = LocalDate.of(2026, 11, 9),
+        )
+
+        assertEquals(
+            listOf(
+                "evt-none" to LocalDate.of(2026, 11, 4),
+                "evt-weekday-short_2026-11-05" to LocalDate.of(2026, 11, 5), // Thu
+                "evt-weekday-short_2026-11-06" to LocalDate.of(2026, 11, 6), // Fri (skips Sat/Sun)
+                "evt-weekday-short_2026-11-09" to LocalDate.of(2026, 11, 9), // Mon
+            ),
+            results.map { it.occurrenceId to it.occurrenceDate },
+        )
+    }
+
+    @Test
+    fun `multi-BYDAY with INTERVAL 2 handles both mid-week Wednesday and Sunday series starts`() {
+        val midWeekEvent = CalendarEvent(
+            id = "evt-midweek-biweekly",
+            galaxyId = "galaxy-alpha",
+            title = "MWF Swim Club",
+            date = LocalDate.of(2026, 11, 4), // Wednesday
+            rrule = "FREQ=WEEKLY;INTERVAL=2;BYDAY=MO,WE,FR",
+        )
+        val midWeekResults = WallClockRecurrenceExpander.expandEventsInWindow(
+            events = listOf(midWeekEvent),
+            windowStart = LocalDate.of(2026, 11, 1),
+            windowEnd = LocalDate.of(2026, 11, 22),
+        )
+        // Week 0 (Nov 2-8): Wed Nov 4, Fri Nov 6
+        // Week 1 (Nov 9-15): skipped
+        // Week 2 (Nov 16-22): Mon Nov 16, Wed Nov 18, Fri Nov 20
+        assertEquals(
+            listOf(
+                LocalDate.of(2026, 11, 4),
+                LocalDate.of(2026, 11, 6),
+                LocalDate.of(2026, 11, 16),
+                LocalDate.of(2026, 11, 18),
+                LocalDate.of(2026, 11, 20),
+            ),
+            midWeekResults.map { it.occurrenceDate },
+        )
+
+        val sundayStartEvent = CalendarEvent(
+            id = "evt-sun-biweekly",
+            galaxyId = "galaxy-alpha",
+            title = "Sunday & Tuesday Music Lesson",
+            date = LocalDate.of(2026, 11, 1), // Sunday
+            rrule = "FREQ=WEEKLY;INTERVAL=2;BYDAY=SU,TU",
+        )
+        val sundayResults = WallClockRecurrenceExpander.expandEventsInWindow(
+            events = listOf(sundayStartEvent),
+            windowStart = LocalDate.of(2026, 11, 1),
+            windowEnd = LocalDate.of(2026, 11, 21),
+        )
+        // Week 0 (Nov 1-7): Sun Nov 1, Tue Nov 3
+        // Week 1 (Nov 8-14): skipped
+        // Week 2 (Nov 15-21): Sun Nov 15, Tue Nov 17
+        assertEquals(
+            listOf(
+                LocalDate.of(2026, 11, 1),
+                LocalDate.of(2026, 11, 3),
+                LocalDate.of(2026, 11, 15),
+                LocalDate.of(2026, 11, 17),
+            ),
+            sundayResults.map { it.occurrenceDate },
+        )
+    }
 }

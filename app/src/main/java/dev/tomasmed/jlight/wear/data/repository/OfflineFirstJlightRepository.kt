@@ -1,6 +1,10 @@
 package dev.tomasmed.jlight.wear.data.repository
 
 import dev.tomasmed.jlight.wear.data.auth.AuthTokenStore
+import dev.tomasmed.jlight.wear.data.local.ChoreEntity
+import dev.tomasmed.jlight.wear.data.local.EventEntity
+import dev.tomasmed.jlight.wear.data.local.JlightWearDao
+import dev.tomasmed.jlight.wear.data.local.ListItemEntity
 import dev.tomasmed.jlight.wear.data.remote.JlightApiClient
 import dev.tomasmed.jlight.wear.domain.model.CalendarEvent
 import dev.tomasmed.jlight.wear.domain.model.ChoreItem
@@ -16,12 +20,13 @@ import kotlinx.coroutines.flow.map
 import java.time.LocalDate
 
 /**
- * Offline-first implementation of [JlightRepository] combining local cached state with
- * [WallClockRecurrenceExpander] and [JlightApiClient].
+ * Offline-first implementation of [JlightRepository] combining local Room SQLite persistence
+ * ([JlightWearDao]) and reactive state with [WallClockRecurrenceExpander] and [JlightApiClient].
  */
 class OfflineFirstJlightRepository(
     private val tokenStore: AuthTokenStore,
     private val apiClient: JlightApiClient,
+    private val wearDao: JlightWearDao? = null,
     initialEvents: List<CalendarEvent> = emptyList(),
     initialChores: List<ChoreItem> = emptyList(),
     initialLists: List<SharedListItem> = emptyList(),
@@ -58,6 +63,9 @@ class OfflineFirstJlightRepository(
             cachedEvents.value = events
             cachedChores.value = chores
             cachedLists.value = lists
+            wearDao?.upsertEvents(events.map(EventEntity::fromDomain))
+            wearDao?.upsertChores(chores.map(ChoreEntity::fromDomain))
+            wearDao?.upsertListItems(lists.map(ListItemEntity::fromDomain))
         }
 
     override suspend fun toggleChoreCompleted(
@@ -65,10 +73,20 @@ class OfflineFirstJlightRepository(
         completed: Boolean,
     ): Result<ChoreItem> =
         runCatching {
-            val updated = apiClient.toggleChore(choreId, completed)
+            val remoteCompleted = apiClient.toggleChore(choreId, completed)
+            val current = cachedChores.value.firstOrNull { it.id == choreId }
+                ?: ChoreItem(
+                    id = choreId,
+                    galaxyId = tokenStore.getCredentials()?.galaxyId ?: "default",
+                    title = "",
+                    memberId = "Everyone",
+                    completed = remoteCompleted,
+                )
+            val updated = current.copy(completed = remoteCompleted)
             cachedChores.value = cachedChores.value.map { existing ->
                 if (existing.id == choreId) updated else existing
             }
+            wearDao?.upsertChores(listOf(ChoreEntity.fromDomain(updated)))
             updated
         }
 
@@ -77,10 +95,12 @@ class OfflineFirstJlightRepository(
         completed: Boolean,
     ): Result<SharedListItem> =
         runCatching {
-            val target = cachedLists.value.first { it.id == itemId }.copy(completed = completed)
+            val remoteCompleted = apiClient.toggleListItem(itemId, completed)
+            val target = cachedLists.value.first { it.id == itemId }.copy(completed = remoteCompleted)
             cachedLists.value = cachedLists.value.map { existing ->
                 if (existing.id == itemId) target else existing
             }
+            wearDao?.upsertListItems(listOf(ListItemEntity.fromDomain(target)))
             target
         }
 
