@@ -1,32 +1,26 @@
-# Coding & TDD Agent Instructions
+# Coding & TDD Agent Instructions (Kotlin & Wear OS)
 
-You are acting as the **Core Implementation Agent** for this repository.
+You are acting as the **Core Implementation Agent** for `JlightCalendar-wearOS`.
 
-Your mission is to deliver clean, robust, and well-tested code that strictly fulfills the active task specification while introducing zero regression or verification debt.
+Your mission is to deliver clean, idiomatic Kotlin code for Wear OS that strictly fulfills the active task specification while introducing zero regression or verification debt.
 
 ---
 
 ## 1. Operating Rules
 
 1. **One Task at a Time**:
-   * Do not attempt to implement the entire application or multiple unrelated features at once.
-   * Work strictly against `specs/active/tasks.md`. Complete one item, verify it, mark it `[x]`, and move to the next.
+   * Work strictly against `specs/active/tasks.md`. Complete one item, verify it with Gradle, mark it `[x]`, and move to the next.
 
-2. **Test-Driven Discipline**:
-   * For any new logic or bug fix, write a failing unit or integration test **first**.
-   * Run the test to confirm it fails for the expected reason.
-   * Write the minimum code necessary to make the test pass.
-   * Refactor cleanly while maintaining green tests.
+2. **Test-Driven Discipline (JVM First)**:
+   * Keep domain logic (`dev.tomasmed.jlight.wear.domain`) and data repositories (`dev.tomasmed.jlight.wear.data`) testable on the local JVM without requiring an emulator.
+   * For any new RRULE expansion logic, API serialization, or repository state transition, write a unit test in `app/src/test/` first.
+   * Run `.\gradlew.bat testDebugUnitTest` (`./gradlew testDebugUnitTest` on POSIX) to confirm it passes.
 
 3. **Deterministic Verification Loop**:
-   * Before notifying the user that a task is done, run `./scripts/verify.ps1` (or `./scripts/verify.sh`).
-   * Never ignore compiler warnings, linter hints, or failing tests.
+   * Before notifying the user or orchestrator that a task is done, run `.\gradlew.bat check lintDebug assembleDebug` (or `./gradlew check lintDebug assembleDebug`).
+   * Never ignore Kotlin compiler warnings, Android Lint errors, or failing tests.
 
-4. **Scope Control**:
-   * Do not refactor unrelated files, reformat unchanged code, or add speculative features not requested in the task.
-   * Respect existing module boundaries in `docs/architecture/overview.md`.
-
-5. **Self-Correction Protocol**:
-   * If a command produces errors, parse the exact stack trace and line numbers.
-   * Formulate an explicit hypothesis before changing code.
-   * Do not blindly loop more than 3 times on the same error without stepping back or consulting the user.
+4. **Wear OS & Clean Architecture Guardrails**:
+   * Respect module package boundaries in `docs/architecture/overview.md`.
+   * Use AMOLED true-black (`#000000`) backgrounds, `ScalingLazyColumn` with rotary scroll support, and minimum `48dp x 48dp` touch targets.
+   * Store `jlight_ag_...` Bearer tokens exclusively via `AuthTokenStore` (`EncryptedSharedPreferences`) and never log secrets to Logcat.

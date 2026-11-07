@@ -1,0 +1,109 @@
+version: "1"
+
+# Target LLM (LiteLLM provider/model notation)
+model: "gemini/gemini-3.8-flash"
+
+# Agent harness: "native" (fastest, lightweight)
+harness: "native"
+
+filters:
+  ignore_patterns:
+    - "**/*.lock"
+    - "**/gradle-wrapper.jar"
+    - "**/build/**"
+    - "**/.gradle/**"
+    - "**/*.png"
+    - "**/*.webp"
+    - "**/*.apk"
+    - "**/*.aab"
+  max_diff_lines: 3000
+
+rules:
+  require_tests: true
+  check_security: true
+  check_architecture: true
+  custom_guidelines:
+    - "Clean Architecture Boundaries: UI (Compose), Tiles (ProtoLayout), and Complications must never call Ktor or Room DAOs directly; they must consume Domain use-cases or repository interfaces."
+    - "Local Wall-Clock Time Parity: Event dates (YYYY-MM-DD) and times (HH:mm) must use java.time.LocalDate and java.time.LocalTime without UTC Instant shifts, maintaining strict parity with JlightCalendar ADR 0013."
+    - "Secret & PAT Hygiene: Autonomous Agent Personal Access Tokens (jlight_ag_...) and device codes must be persisted exclusively in EncryptedSharedPreferences and never printed to Logcat or exception messages."
+    - "Wear OS Circular Ergonomics: Interactive controls must maintain a minimum 48dp x 48dp tap target, use AMOLED true-black (#000000) backgrounds, and use ScalingLazyColumn with rotary scroll support."
+    - "Direct Gradle Tooling: All build and verification commands must invoke ./gradlew directly; never introduce PowerShell or shell wrapper scripts."
+
+voting:
+  enabled: false
+  allow_approve: true
+  allow_request_changes: true
+
+# Specialized Review Lenses (Sub-Agent Turns)
+lenses:
+  - name: "architecture_adrs"
+    description: "Evaluates changes against in-repo ADRs, Clean Architecture boundaries, and JlightCalendar contracts."
+    prompt: |
+      You are an expert Android & Wear OS Software Architect sub-agent.
+      Evaluate the git diff strictly through the lens of architectural integrity and in-repo ADRs:
+      1. Cross-reference changes with Architecture Decision Records in docs/adr/ and docs/architecture/overview.md.
+      2. Verify strict separation between Presentation (ui, tile, complication), Domain (pure Kotlin models, use-cases, WallClockRecurrenceExpander), and Data (Ktor, Room, EncryptedSharedPreferences).
+      3. Ensure all dependency versions are managed in gradle/libs.versions.toml and no unauthorized dependencies are introduced.
+      4. Verify local wall-clock time handling (LocalDate / LocalTime) with zero UTC drift.
+      Flag architectural violations as critical blockers.
+    context_files:
+      - "docs/adr/*.md"
+      - "docs/architecture/overview.md"
+      - "AGENTS.md"
+    file_patterns: []
+    blocking: true
+    enabled: true
+
+  - name: "security_owasp"
+    description: "Audits diff for mobile OWASP vulnerabilities, PAT leaks, Logcat exposure, and insecure storage."
+    prompt: |
+      You are an expert Mobile Application Security (AppSec) sub-agent.
+      Audit the git diff strictly for Android & Wear OS security flaws:
+      1. Verify that Bearer tokens (jlight_ag_...) and pairing credentials are stored exclusively in EncryptedSharedPreferences backed by Android Keystore.
+      2. Ensure HTTP Authorization headers, PATs, and join codes are never logged in Logcat or included in crash/error strings.
+      3. Check AndroidManifest.xml and Ktor client configuration for insecure cleartext traffic or overly broad exported components.
+      Flag any security vulnerability as a critical blocker.
+    context_files:
+      - "docs/adr/0003-device-code-auth-and-encrypted-pat-storage.md"
+      - "AGENTS.md"
+    file_patterns: []
+    blocking: true
+    enabled: true
+
+  - name: "test_integrity"
+    description: "Scrutinizes JUnit/Coroutine test modifications and enforces anti-lazy-assert discipline."
+    prompt: |
+      You are an expert Kotlin QA and Test Integrity sub-agent.
+      Audit the test code and assertions in this git diff:
+      1. Anti-Lazy-Assert: Flag hollow assertions (e.g. assertTrue(true), trivial identity checks, empty test bodies).
+      2. Over-Mocking: Flag tests that mock out the subject under test instead of verifying real domain logic or repository state transitions.
+      3. Edge-Case Coverage: Ensure recurrence expansion (RRULE, exdates, biweekly, monthly) and sync error paths are tested with concrete dates and payloads.
+      Flag hollow tests or deleted assertions as blockers.
+    context_files:
+      - "AGENTS.md"
+    file_patterns:
+      - "app/src/**"
+    blocking: true
+    enabled: true
+
+  - name: "wearos_round_ui_ux"
+    description: "Audits Jetpack Compose for Wear OS, Tiles, and Complications for circular screen ergonomics and OLED hygiene."
+    prompt: |
+      You are a Lead Wear OS UI/UX Designer and Watch Interaction Specialist sub-agent.
+      Audit every presentation-layer change for circular smartwatch displays (e.g. Samsung Galaxy Watch 4/5/6/7/Ultra):
+      1. Circular Viewport Clipping: Ensure lists use ScalingLazyColumn (or Horologist ScalingLazyColumn) with proper horizontal/vertical padding so top and bottom items are not clipped by the circular bezel.
+      2. Rotary Crown & Bezel Support: Verify scrollable screens support physical rotating bezel and crown input.
+      3. Touch Ergonomics: Verify all interactive buttons, chips, and checklist rows meet the minimum 48dp x 48dp hit target.
+      4. OLED Battery & Visual Hygiene: Ensure backgrounds use true black (#000000) and member/category accents preserve high-contrast readability at arm's length.
+      Flag any circular clipping risk or <48dp touch target as a blocker or warning.
+    context_files:
+      - "docs/adr/0002-kotlin-compose-wearos-stack.md"
+      - "docs/architecture/overview.md"
+      - "AGENTS.md"
+    file_patterns:
+      - "app/src/main/java/dev/tomasmed/jlight/wear/ui/**"
+      - "app/src/main/java/dev/tomasmed/jlight/wear/tile/**"
+      - "app/src/main/java/dev/tomasmed/jlight/wear/complication/**"
+      - "app/src/main/res/**"
+    blocking: true
+    enabled: true

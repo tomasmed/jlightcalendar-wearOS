@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Jlight Calendar</string>
+    <string name="tile_agenda_label">Jlight Family Agenda</string>
+    <string name="complication_next_event_label">Jlight Next Event</string>
+</resources>

@@ -1,111 +1,79 @@
-# 🤖 Polyglot Agentic Git Template
+# ⌚ JlightCalendar — Wear OS Companion (`JlightCalendar-wearOS`)
 
-A high-velocity, low-overhead repository template designed for the **Agentic SDLC** and solo/hobbyist developers. 
+**JlightCalendar-wearOS** is the native **Kotlin & Jetpack Compose for Wear OS** smartwatch companion for [**JlightCalendar**](https://github.com/tomasmed/JlightCalendar), the open-source family household calendar, chore tracker, and shared list platform.
 
-Built to support **Next.js, Vue 3, SvelteKit, C# (.NET), Python (uv), and Go** with zero initial clutter.
-
----
-
-## 🌟 Core Concepts
-
-1. **"Harness Over Model"**: The repository acts as the deterministic control harness for AI agents (Cursor, Claude Code, GitHub Copilot, Aider, Antigravity).
-2. **Universal Contract (`AGENTS.md`)**: A single source of truth for build commands, test recipes, and inviolable guardrails stewarded under the Linux Foundation / Agentic AI Foundation standard.
-3. **Spec-Driven Development (`specs/`)**: Eliminates "vibe-coding" drift by decoupling **Intent** (`spec.md`) from **Plan** (`plan.md`) and **Execution** (`tasks.md`).
-4. **Deterministic Gate (`scripts/verify.*`)**: A single compound command (`lint + typecheck + test`) that agents must run before declaring work complete.
-5. **Architectural Decision Records (`docs/adr/`)**: In-repo MADR records preventing AI from violating past architectural choices or hallucinating external dependencies.
-6. **PR Review Agent Contract (`.agents/pr-reviewer.md`)**: Specific guidelines for automated code reviews focused on spec conformance, test integrity, and security (without linter nitpicking).
+Designed specifically for circular AMOLED smartwatches—including **Samsung Galaxy Watch 4 / 5 / 6 / 7 / Ultra** running **Wear OS 4 & 5**—this app brings your family's household **"Galaxy"** right to your wrist with offline-first caching, rotating bezel/crown ergonomics, glanceable Tiles, and Watch Face Complications.
 
 ---
 
-## 🚀 Quick Start: The "Commit 1" Bootstrap Ritual
+## 🌌 Relationship to Upstream `JlightCalendar`
 
-When you create a new repository from this template, your first action is to specialize it for your target stack.
+| Repository | Role | Tech Stack | Local Workspace Path |
+| :--- | :--- | :--- | :--- |
+| [**`tomasmed/JlightCalendar`**](https://github.com/tomasmed/JlightCalendar) | Hosted Web App, Wall Kiosk & REST API Host | Next.js 15, React 19, TypeScript, Turso / libSQL, NextAuth | `E:\JlightCalendar` |
+| [**`tomasmed/jlightcalendar-wearOS`**](https://github.com/tomasmed/jlightcalendar-wearOS) | Native Smartwatch Companion App, Tile & Complication | Kotlin 2.0, Compose for Wear OS (Material 3), ProtoLayout, Ktor, Room | `E:\Projects\JlightCalendar-wearOS` |
 
-### Option A: Let an AI Agent Initialize It (Recommended)
-Prompt your agent in the new repository:
-> *"Initialize this project for **Next.js 15 (TypeScript, Tailwind)** using the bootstrap protocol in `.agents/bootstrap.md`."*
-*(Replace with Vue, Svelte, .NET, Python, or Go as desired).*
+### Key Shared Concepts
+* **Household Galaxies & Inhabitants**: Every family workspace is a **Galaxy** populated by color-coded family members (and `"Everyone"` for household-wide events). The watch renders multi-member color indicators using the upstream **OSL (Fluorescent Light-Spill)** high-contrast palette against true-black (`#000000`) AMOLED backgrounds.
+* **Zero-Password Watch Pairing (ADR 0015 / ADR 0003)**: Typing Google OAuth passwords on a 1.4-inch round watch screen is painful. Instead, the watch initiates an RFC 8628-style handshake via `POST /api/agent/connect` and displays a scannable **QR Code** (`/?claimBot=BOT-XXXX`) plus a 1-tap `GLX-XXXXX` Join Code fallback. Approving the watch on your phone or wall kiosk mints a scoped `jlight_ag_...` Personal Access Token stored in `EncryptedSharedPreferences`.
+* **Local Wall-Clock Time Parity (ADR 0013 / ADR 0004)**: All event dates (`YYYY-MM-DD`), times (`HH:mm`), and recurrence rules (`RRULE` + `exdates`) are evaluated in **local wall-clock time** (`java.time.LocalDate` / `LocalTime`) without UTC timezone shift, ensuring schedules on your wrist match your wall kiosk in every timezone.
 
-The agent will:
-1. Update `AGENTS.md` with your stack's exact build/test/lint commands.
-2. Initialize `docs/adr/0002-technology-stack.md`.
-3. Scaffold baseline files and verify them with `./scripts/verify.ps1`.
-4. Stage and commit: `feat(init): bootstrap project with [Stack] architecture and agent harness`.
+---
 
-### Option B: Run the Bootstrap Helper Manually
+## ✨ Core Features & Milestones
+
+1. **M1 — Foundation & Clean Architecture Scaffold**:
+   * Single-module `:app` organized into `ui/`, `tile/`, `complication/`, `domain/`, and `data/` layers.
+   * Version catalog (`gradle/libs.versions.toml`), JUnit unit test suite, Android Lint, and multi-lens AI PR review (`.ci-reviewer.yml`).
+2. **M2 — QR Device-Code Pairing & Encrypted Token Store**:
+   * Calls `POST /api/agent/connect` (`{ agentName: "Galaxy Watch", rune: "⌚" }`), renders a scannable QR code on the watch face, polls for approval, and stores `jlight_ag_...` in `EncryptedSharedPreferences`.
+3. **M3 — Offline-First Room Sync & Wall-Clock RRULE Engine**:
+   * Fetches `/api/events`, `/api/chores`, and `/api/lists` via Ktor Client, caches entities in Room SQLite, and expands `DAILY`, `WEEKLY`, `BIWEEKLY`, and `MONTHLY` recurrences locally so your schedule works even in Airplane mode.
+4. **M4 — Interactive Wear Compose UI**:
+   * **Today & Tomorrow Agenda Screen** with physical rotating bezel / crown scrolling (`ScalingLazyColumn`).
+   * **Event Detail Screen** showing member color pills, time span, location, and recurrence badge.
+   * **Chores & Shared Lists Checklist** with `48dp x 48dp` touch targets to complete chores (earning ⭐ stars!) or check off grocery items from your wrist.
+5. **M5 — Glanceable ProtoLayout Tile & Watch Face Complication**:
+   * **Agenda Tile**: Swipe right-to-left from your watch face to view your next 3 household events at a glance.
+   * **Next Event Complication**: Exports `SHORT_TEXT` to any compatible Wear OS watch face slot.
+
+---
+
+## 🛠️ Developer Toolchain & Quick Start
+
+### Prerequisites
+* **JDK 21**: Installed at `C:\Program Files\Android\openjdk\jdk-21.0.8` (`JAVA_HOME`).
+* **Android SDK (API 34)**: Installed at `C:\Users\tomas\AppData\Local\Android\Sdk` (`ANDROID_HOME`) with `platform-tools`, `platforms;android-34`, and `build-tools;34.0.0`.
+
+### Direct Gradle Commands (No Wrapper Scripts)
+All verification and build tasks run directly through the Gradle Wrapper:
+
 ```powershell
-# In PowerShell:
-./scripts/bootstrap.ps1 -Stack nextjs   # or vue, svelte, dotnet, python, go
+# 1. Run the full verification gate (Unit Tests + Android Lint)
+.\gradlew.bat check lintDebug
+
+# 2. Run JVM unit tests only
+.\gradlew.bat testDebugUnitTest
+
+# 3. Build the Debug APK
+.\gradlew.bat assembleDebug
+```
+
+### Sideloading to a Samsung Galaxy Watch via Wireless ADB
+See [.agents/skills/adb-galaxy-watch/SKILL.md](./.agents/skills/adb-galaxy-watch/SKILL.md) for full instructions:
+```powershell
+adb pair <WATCH_IP>:<PAIR_PORT> <PAIR_CODE>
+adb connect <WATCH_IP>:<CONNECT_PORT>
+.\gradlew.bat installDebug
+adb shell am start -n dev.tomasmed.jlight.wear/.ui.MainActivity
 ```
 
 ---
 
-## 📁 Repository Blueprint
+## 📚 Repository Documentation Map
 
-```text
-├── .agents/                           # Specialized agent persona rubrics
-│   ├── bootstrap.md                   # Instructions for the Commit 1 ritual
-│   ├── pr-reviewer.md                 # Rules & rubric for PR Review agents
-│   ├── code-implementer.md            # TDD & implementation guidelines
-│   └── architect.md                   # Architecture & ADR review guidelines
-├── .cursor/rules/                     # IDE-specific pointers
-│   └── 00-agent-core.mdc              # Points Cursor to AGENTS.md
-├── .github/
-│   ├── copilot-instructions.md        # Points Copilot to AGENTS.md
-│   ├── PULL_REQUEST_TEMPLATE.md       # PR template with agent validation gates
-│   ├── ISSUE_TEMPLATE/feature_spec.md # Feature spec issue starter
-│   └── workflows/ci.yml               # Auto-detecting multi-stack CI gate
-├── docs/
-│   ├── adr/                           # Architectural Decision Records (MADR)
-│   │   ├── 0001-record-architecture-decisions.md
-│   │   ├── README.md                  # Index of ADRs
-│   │   └── template.md                # Markdown ADR template
-│   ├── architecture/                  # High-level architecture & module boundaries
-│   │   └── overview.md
-│   └── workflows/                     # Human-in-the-loop workflows
-│       └── agentic-sdlc.md
-├── specs/                             # Spec-Driven Development workspace
-│   ├── _template/                     # Master templates
-│   │   ├── spec.md                    # Business intent & acceptance criteria
-│   │   ├── plan.md                    # Architecture plan & touched files
-│   │   └── tasks.md                   # Atomic checklist with TDD checks
-│   ├── active/                        # Currently active feature spec
-│   └── archive/                       # Historical completed specs
-├── scripts/
-│   ├── verify.ps1                     # PowerShell deterministic test/lint/type gate
-│   ├── verify.sh                      # Bash deterministic test/lint/type gate
-│   └── bootstrap.ps1                  # Interactive stack switcher
-├── AGENTS.md                          # Universal Root Agent Contract (SSOT)
-├── CLAUDE.md                          # Points Claude Code to AGENTS.md
-├── .gitignore                         # Comprehensive polyglot gitignore
-└── README.md                          # This documentation
-```
-
----
-
-## 🔄 Daily Workflow with Agents (Spec-Driven SDLC)
-
-```
-1. Specify              2. Plan                 3. Implement (TDD)      4. Deterministic Gate     5. Review & Merge
-(Human / spec.md) ──▶  (Agent / plan.md) ──▶   (Agent / tasks.md) ──▶  (./scripts/verify.*) ──▶  (.agents/pr-reviewer.md)
-```
-
-1. **Specify**: Copy `specs/_template/` to `specs/active/`. Define what you want in `spec.md`.
-2. **Plan**: Ask your agent: *"Read `specs/active/spec.md` and draft `plan.md` and `tasks.md`."*
-3. **Approve**: Review the plan to verify there is no over-engineering or unwanted dependencies.
-4. **Implement**: Tell the agent: *"Work through `tasks.md` using TDD. Run `./scripts/verify.ps1` after each task."*
-5. **Review**: Ask the PR review agent: *"Evaluate the git diff against `specs/active/spec.md` following `.agents/pr-reviewer.md`."*
-6. **Merge & Archive**: Merge the code and move `specs/active/` to `specs/archive/YYYY-MM-feature-name/`.
-
----
-
-## 🛡️ Supported Technology Stacks
-
-| Ecosystem | Primary Tools | Full Verify Command |
-| :--- | :--- | :--- |
-| **Next.js** | Next.js 15, TypeScript, Tailwind, Vitest | `pnpm lint && pnpm typecheck && pnpm test` |
-| **Vue.js** | Vue 3, Vite, TypeScript, Vitest | `pnpm lint && pnpm typecheck && pnpm test` |
-| **Svelte.js** | SvelteKit 2, Vite, TypeScript, Vitest | `pnpm check && pnpm lint && pnpm test` |
-| **C# (.NET)** | .NET 9/8, xUnit, C# 13, dotnet CLI | `dotnet format --verify-no-changes && dotnet test` |
-| **Python** | Python 3.12+, uv, ruff, pytest, mypy | `uv run ruff check . && uv run mypy . && uv run pytest` |
-| **Go** | Go 1.23+, golangci-lint, standard tests | `golangci-lint run && go test -race ./...` |
+* [**`AGENTS.md`**](./AGENTS.md) — Universal Agent Operating Contract, command matrix, and guardrails.
+* [**`docs/architecture/overview.md`**](./docs/architecture/overview.md) — Clean Architecture layers, upstream `JlightCalendar` REST API mapping, and data flow.
+* [**`docs/workflows/agentic-sdlc.md`**](./docs/workflows/agentic-sdlc.md) — Feature-branching strategy and `/boost` multi-agent orchestration plan (**Gemini 4 Argon** vs. **Gemini 3.8 Flash**).
+* [**`docs/adr/README.md`**](./docs/adr/README.md) — Index of Architecture Decision Records (`ADR 0001`–`ADR 0004`).
+* [**`specs/README.md`**](./specs/README.md) — Spec-Driven Development (SDD) guide and active milestone specifications (`specs/active/`).

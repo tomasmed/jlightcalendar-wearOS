@@ -1,0 +1,36 @@
+name: Automated Code Review
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  review:
+    name: CI Code Reviewer
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Run CI Code Reviewer
+        uses: tomasmed/ci-code-reviewer@master
+        with:
+          model: "gemini/gemini-3.8-flash"
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          config_path: ".ci-reviewer.yml"
+          harness: "native"
+        env:
+          # Model API keys (configure in GitHub Secrets)
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
