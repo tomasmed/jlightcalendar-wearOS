@@ -1,5 +1,6 @@
 package dev.tomasmed.jlight.wear.data.local
 
+import android.content.Context
 import androidx.room.Dao
 import androidx.room.Database
 import androidx.room.Entity
@@ -7,6 +8,7 @@ import androidx.room.Insert
 import androidx.room.OnConflictStrategy
 import androidx.room.PrimaryKey
 import androidx.room.Query
+import androidx.room.Room
 import androidx.room.RoomDatabase
 import dev.tomasmed.jlight.wear.domain.model.CalendarEvent
 import dev.tomasmed.jlight.wear.domain.model.ChoreItem
@@ -136,8 +138,14 @@ interface JlightWearDao {
     @Query("SELECT * FROM events WHERE galaxyId = :galaxyId")
     fun observeEvents(galaxyId: String): Flow<List<EventEntity>>
 
+    @Query("SELECT * FROM events WHERE galaxyId = :galaxyId")
+    suspend fun getEventsSnapshot(galaxyId: String): List<EventEntity>
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsertEvents(events: List<EventEntity>)
+
+    @Query("DELETE FROM events WHERE galaxyId = :galaxyId")
+    suspend fun clearEventsForGalaxy(galaxyId: String)
 
     @Query("SELECT * FROM chores WHERE galaxyId = :galaxyId ORDER BY completed ASC, title ASC")
     fun observeChores(galaxyId: String): Flow<List<ChoreEntity>>
@@ -145,11 +153,17 @@ interface JlightWearDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsertChores(chores: List<ChoreEntity>)
 
+    @Query("DELETE FROM chores WHERE galaxyId = :galaxyId")
+    suspend fun clearChoresForGalaxy(galaxyId: String)
+
     @Query("SELECT * FROM shared_lists WHERE galaxyId = :galaxyId ORDER BY completed ASC, text ASC")
     fun observeListItems(galaxyId: String): Flow<List<ListItemEntity>>
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsertListItems(items: List<ListItemEntity>)
+
+    @Query("DELETE FROM shared_lists WHERE galaxyId = :galaxyId")
+    suspend fun clearListItemsForGalaxy(galaxyId: String)
 }
 
 @Database(
@@ -159,4 +173,21 @@ interface JlightWearDao {
 )
 abstract class JlightWearDatabase : RoomDatabase() {
     abstract fun wearDao(): JlightWearDao
+
+    companion object {
+        @Volatile
+        private var instance: JlightWearDatabase? = null
+
+        fun getInstance(context: Context): JlightWearDatabase =
+            instance ?: synchronized(this) {
+                instance ?: Room.databaseBuilder(
+                    context.applicationContext,
+                    JlightWearDatabase::class.java,
+                    "jlight_wear.db",
+                )
+                    .fallbackToDestructiveMigration()
+                    .build()
+                    .also { instance = it }
+            }
+    }
 }

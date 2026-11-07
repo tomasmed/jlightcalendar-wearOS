@@ -219,6 +219,185 @@ class JlightApiClientTest {
         assertTrue(fakeDao.listsState.value.single().completed)
     }
 
+    @Test
+    fun `device code polling and join code exchange transition repository to Paired and store PAT`() = runTest {
+        val tokenStore = InMemoryAuthTokenStore()
+        val fakeDao = FakeJlightWearDao()
+        var pollCalls = 0
+
+        val mockEngine = MockEngine { request ->
+            when {
+                request.url.encodedPath == "/api/agent/connect" && request.method == HttpMethod.Post -> {
+                    val bodyText = request.body.toByteArray().decodeToString()
+                    if (bodyText.contains("GLX-FAST1")) {
+                        respond(
+                            content = """
+                                {
+                                  "status": "approved",
+                                  "token": "jlight_ag_fastjoin0123456789abcdef0123456789abcdef",
+                                  "galaxyId": "galaxy-fast",
+                                  "galaxyName": "Fast Household"
+                                }
+                            """.trimIndent(),
+                            status = HttpStatusCode.OK,
+                            headers = headersOf(HttpHeaders.ContentType, "application/json"),
+                        )
+                    } else {
+                        respond(
+                            content = """
+                                {
+                                  "deviceCode": "dvc_poll_1",
+                                  "userCode": "BOT-1234-ABCD",
+                                  "verificationUri": "https://jlight.example.com/?claimBot=BOT-1234-ABCD",
+                                  "expiresIn": 900,
+                                  "interval": 3
+                                }
+                            """.trimIndent(),
+                            status = HttpStatusCode.OK,
+                            headers = headersOf(HttpHeaders.ContentType, "application/json"),
+                        )
+                    }
+                }
+                request.url.encodedPath == "/api/agent/connect" && request.method == HttpMethod.Get -> {
+                    pollCalls++
+                    if (pollCalls == 1) {
+                        respond(
+                            content = """{"status":"pending","userCode":"BOT-1234-ABCD"}""",
+                            status = HttpStatusCode.Accepted,
+                            headers = headersOf(HttpHeaders.ContentType, "application/json"),
+                        )
+                    } else {
+                        respond(
+                            content = """
+                                {
+                                  "status": "approved",
+                                  "token": "jlight_ag_polledtoken0123456789abcdef0123456789",
+                                  "galaxyId": "galaxy-polled"
+                                }
+                            """.trimIndent(),
+                            status = HttpStatusCode.OK,
+                            headers = headersOf(HttpHeaders.ContentType, "application/json"),
+                        )
+                    }
+                }
+                else -> error("Unexpected request: ${request.url}")
+            }
+        }
+
+        val repo = OfflineFirstJlightRepository(
+            tokenStore = tokenStore,
+            apiClient = JlightApiClient(tokenStore, mockEngine),
+            wearDao = fakeDao,
+        )
+
+        val awaiting = repo.initiateDevicePairing("https://jlight.example.com").getOrThrow()
+        assertEquals("BOT-1234-ABCD", awaiting.userCode)
+        assertEquals("dvc_poll_1", awaiting.deviceCode)
+
+        // First poll -> still pending
+        val firstPoll = repo.pollDevicePairing("https://jlight.example.com", "dvc_poll_1").getOrThrow()
+        assertTrue(firstPoll is PairingSessionState.AwaitingClaim)
+
+        // Second poll -> approved and credentials persisted
+        val secondPoll = repo.pollDevicePairing("https://jlight.example.com", "dvc_poll_1").getOrThrow()
+        assertEquals(PairingSessionState.Paired(galaxyId = "galaxy-polled", agentName = "Galaxy Watch"), secondPoll)
+        assertEquals("galaxy-polled", tokenStore.getCredentials()?.galaxyId)
+
+        // Unpair and test fast join code exchange
+        repo.unpair()
+        assertEquals(PairingSessionState.Unpaired, repo.observePairingState().first())
+
+        val fastPaired = repo.pairWithJoinCode("https://jlight.example.com", "GLX-FAST1").getOrThrow()
+        assertEquals("galaxy-fast", fastPaired.galaxyId)
+        assertEquals("jlight_ag_fastjoin0123456789abcdef0123456789abcdef", tokenStore.getCredentials()?.agentPat)
+    }
+
+    @Test
+    fun `HTTP 401 or 403 from upstream revokes stored PAT and transitions watch to Unpaired`() = runTest {
+        val tokenStore = InMemoryAuthTokenStore(
+            StoredAuthCredentials(
+                baseUrl = "https://jlight.example.com",
+                galaxyId = "home-galaxy",
+                agentPat = "jlight_ag_revoked_token",
+            ),
+        )
+        val fakeDao = FakeJlightWearDao()
+
+        val mockEngine = MockEngine {
+            respond(
+                content = """{"error":"Agent key revoked"}""",
+                status = HttpStatusCode.Unauthorized,
+                headers = headersOf(HttpHeaders.ContentType, "application/json"),
+            )
+        }
+
+        val repo = OfflineFirstJlightRepository(
+            tokenStore = tokenStore,
+            apiClient = JlightApiClient(tokenStore, mockEngine),
+            wearDao = fakeDao,
+        )
+
+        val syncResult = repo.syncWithRemote()
+        assertTrue(syncResult.isFailure)
+        assertEquals(null, tokenStore.getCredentials())
+        assertEquals(PairingSessionState.Unpaired, repo.observePairingState().first())
+    }
+
+    @Test
+    fun `createEvent posts wall-clock startTime and endTime and upserts into local Room DAO`() = runTest {
+        val tokenStore = InMemoryAuthTokenStore(
+            StoredAuthCredentials(
+                baseUrl = "https://jlight.example.com",
+                galaxyId = "home-galaxy",
+                agentPat = "jlight_ag_valid_pat",
+            ),
+        )
+        val fakeDao = FakeJlightWearDao()
+        var postedBody = ""
+
+        val mockEngine = MockEngine { request ->
+            assertEquals("/api/events", request.url.encodedPath)
+            assertEquals(HttpMethod.Post, request.method)
+            postedBody = request.body.toByteArray().decodeToString()
+            respond(
+                content = """
+                    {
+                      "success": true,
+                      "event": {
+                        "id": "evt-created-99",
+                        "galaxyId": "home-galaxy",
+                        "title": "Pediatric Dentist",
+                        "startTime": "2026-11-08T15:30:00",
+                        "endTime": "2026-11-08T16:30:00",
+                        "isAllDay": false,
+                        "memberIds": "[\"Everyone\"]"
+                      }
+                    }
+                """.trimIndent(),
+                status = HttpStatusCode.OK,
+                headers = headersOf(HttpHeaders.ContentType, "application/json"),
+            )
+        }
+
+        val repo = OfflineFirstJlightRepository(
+            tokenStore = tokenStore,
+            apiClient = JlightApiClient(tokenStore, mockEngine),
+            wearDao = fakeDao,
+        )
+
+        val created = repo.createEvent(
+            title = "Pediatric Dentist",
+            date = LocalDate.of(2026, 11, 8),
+            startTime = LocalTime.of(15, 30),
+        ).getOrThrow()
+
+        assertEquals("evt-created-99", created.id)
+        assertEquals(LocalDate.of(2026, 11, 8), created.date)
+        assertEquals(LocalTime.of(15, 30), created.time)
+        assertTrue(postedBody.contains("2026-11-08T15:30"))
+        assertEquals(1, fakeDao.eventsState.value.size)
+    }
+
     private class FakeJlightWearDao : JlightWearDao {
         val eventsState = MutableStateFlow<List<EventEntity>>(emptyList())
         val choresState = MutableStateFlow<List<ChoreEntity>>(emptyList())
@@ -226,8 +405,14 @@ class JlightApiClientTest {
 
         override fun observeEvents(galaxyId: String): Flow<List<EventEntity>> = eventsState
 
+        override suspend fun getEventsSnapshot(galaxyId: String): List<EventEntity> = eventsState.value
+
         override suspend fun upsertEvents(events: List<EventEntity>) {
             eventsState.value = events
+        }
+
+        override suspend fun clearEventsForGalaxy(galaxyId: String) {
+            eventsState.value = emptyList()
         }
 
         override fun observeChores(galaxyId: String): Flow<List<ChoreEntity>> = choresState
@@ -236,10 +421,18 @@ class JlightApiClientTest {
             choresState.value = chores
         }
 
+        override suspend fun clearChoresForGalaxy(galaxyId: String) {
+            choresState.value = emptyList()
+        }
+
         override fun observeListItems(galaxyId: String): Flow<List<ListItemEntity>> = listsState
 
         override suspend fun upsertListItems(items: List<ListItemEntity>) {
             listsState.value = items
+        }
+
+        override suspend fun clearListItemsForGalaxy(galaxyId: String) {
+            listsState.value = emptyList()
         }
     }
 }

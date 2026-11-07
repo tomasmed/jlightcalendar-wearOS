@@ -193,6 +193,35 @@ data class RemoteListItemDto(
         )
 }
 
+@Serializable
+data class CreateEventRequestDto(
+    val galaxyId: String,
+    val title: String,
+    val startTime: String,
+    val endTime: String,
+    val isAllDay: Boolean = false,
+    val memberIds: List<String> = listOf("Everyone"),
+    val location: String? = null,
+    val description: String? = null,
+)
+
+/**
+ * Thrown when the upstream JlightCalendar server rejects the stored PAT with `401 Unauthorized` or `403 Forbidden`.
+ * Triggers automatic credential cleanup and transition to `PairingSessionState.Unpaired` (ADR 0003).
+ */
+class JlightUnauthorizedException(
+    val statusCode: Int,
+    message: String = "Agent PAT was rejected or revoked by JlightCalendar (HTTP $statusCode).",
+) : IllegalStateException(message)
+
+/**
+ * Thrown when a device-code handshake expires (`410 Gone`) or is denied (`403 Forbidden`).
+ */
+class JlightHandshakeException(
+    val statusCode: Int,
+    message: String,
+) : IllegalStateException(message)
+
 private fun parseWallClockTime(raw: String): LocalTime? =
     runCatching {
         val cleaned = raw.trim().removeSuffix("Z").substringBefore('+').let { value ->
@@ -252,10 +281,17 @@ class JlightApiClient(
         agentName: String = "Galaxy Watch",
     ): AgentConnectResponseDto {
         val cleanBase = baseUrl.trimEnd('/')
-        return httpClient.post("$cleanBase/api/agent/connect") {
+        val response = httpClient.post("$cleanBase/api/agent/connect") {
             contentType(ContentType.Application.Json)
             setBody(AgentConnectRequestDto(agentName = agentName))
-        }.body()
+        }
+        if (response.status.value >= 400) {
+            throw JlightHandshakeException(
+                statusCode = response.status.value,
+                message = "Failed to initiate pairing handshake (HTTP ${response.status.value}).",
+            )
+        }
+        return response.body()
     }
 
     suspend fun joinWithGalaxyCode(
@@ -264,7 +300,7 @@ class JlightApiClient(
         agentName: String = "Galaxy Watch",
     ): AgentConnectResponseDto {
         val cleanBase = baseUrl.trimEnd('/')
-        return httpClient.post("$cleanBase/api/agent/connect") {
+        val response = httpClient.post("$cleanBase/api/agent/connect") {
             contentType(ContentType.Application.Json)
             setBody(
                 AgentConnectRequestDto(
@@ -272,7 +308,14 @@ class JlightApiClient(
                     joinCode = joinCode.trim(),
                 ),
             )
-        }.body()
+        }
+        if (response.status.value >= 400) {
+            throw JlightHandshakeException(
+                statusCode = response.status.value,
+                message = "Join code rejected (HTTP ${response.status.value}).",
+            )
+        }
+        return response.body()
     }
 
     suspend fun pollDeviceCodeStatus(
@@ -280,17 +323,26 @@ class JlightApiClient(
         deviceCode: String,
     ): AgentConnectResponseDto {
         val cleanBase = baseUrl.trimEnd('/')
-        return httpClient.get("$cleanBase/api/agent/connect") {
+        val response = httpClient.get("$cleanBase/api/agent/connect") {
             parameter("deviceCode", deviceCode)
-        }.body()
+        }
+        if (response.status.value == 410 || response.status.value == 403 || response.status.value == 404) {
+            throw JlightHandshakeException(
+                statusCode = response.status.value,
+                message = "Device handshake ended with HTTP ${response.status.value}.",
+            )
+        }
+        return response.body()
     }
 
     suspend fun fetchEvents(): List<CalendarEvent> {
         val creds = requireNotNull(tokenStore.getCredentials()) { "Watch is not paired with a JlightCalendar galaxy." }
-        val root: JsonElement = httpClient.get("${creds.baseUrl}/api/events") {
+        val response = httpClient.get("${creds.baseUrl}/api/events") {
             header(HttpHeaders.Authorization, "Bearer ${creds.agentPat}")
             parameter("galaxyId", creds.galaxyId)
-        }.body()
+        }
+        ensureAuthorized(response.status.value)
+        val root: JsonElement = response.body()
         val arrayElement = when (root) {
             is JsonObject -> root["events"] ?: JsonArray(emptyList())
             is JsonArray -> root
@@ -300,12 +352,73 @@ class JlightApiClient(
         return dtos.map { it.toDomain(jsonSerializer) }
     }
 
+    suspend fun createEvent(
+        title: String,
+        date: LocalDate,
+        startTime: LocalTime? = null,
+        endTime: LocalTime? = null,
+        memberIds: List<String> = listOf("Everyone"),
+        location: String? = null,
+        description: String? = null,
+    ): CalendarEvent {
+        val creds = requireNotNull(tokenStore.getCredentials()) { "Watch is not paired with a JlightCalendar galaxy." }
+        val isAllDay = startTime == null
+        val resolvedStartIso = if (startTime != null) {
+            "${date}T${startTime}"
+        } else {
+            "${date}T00:00:00"
+        }
+        val resolvedEndTime = endTime ?: startTime?.plusHours(1)
+        val resolvedEndIso = if (resolvedEndTime != null) {
+            "${date}T${resolvedEndTime}"
+        } else {
+            "${date}T23:59:59"
+        }
+
+        val response = httpClient.post("${creds.baseUrl}/api/events") {
+            header(HttpHeaders.Authorization, "Bearer ${creds.agentPat}")
+            contentType(ContentType.Application.Json)
+            setBody(
+                CreateEventRequestDto(
+                    galaxyId = creds.galaxyId,
+                    title = title.trim(),
+                    startTime = resolvedStartIso,
+                    endTime = resolvedEndIso,
+                    isAllDay = isAllDay,
+                    memberIds = memberIds.ifEmpty { listOf("Everyone") },
+                    location = location,
+                    description = description,
+                ),
+            )
+        }
+        ensureAuthorized(response.status.value)
+        val root: JsonElement = response.body()
+        val eventElement = (root as? JsonObject)?.get("event") ?: root
+        if (eventElement is JsonObject && eventElement.containsKey("id")) {
+            val dto = jsonSerializer.decodeFromJsonElement<RemoteEventDto>(eventElement)
+            return dto.toDomain(jsonSerializer)
+        }
+        return CalendarEvent(
+            id = "local-${System.currentTimeMillis()}",
+            galaxyId = creds.galaxyId,
+            title = title.trim(),
+            date = date,
+            time = startTime,
+            endTime = resolvedEndTime,
+            memberIds = memberIds.ifEmpty { listOf("Everyone") },
+            location = location,
+            description = description,
+        )
+    }
+
     suspend fun fetchChores(): List<ChoreItem> {
         val creds = requireNotNull(tokenStore.getCredentials()) { "Watch is not paired with a JlightCalendar galaxy." }
-        val root: JsonElement = httpClient.get("${creds.baseUrl}/api/chores") {
+        val response = httpClient.get("${creds.baseUrl}/api/chores") {
             header(HttpHeaders.Authorization, "Bearer ${creds.agentPat}")
             parameter("galaxyId", creds.galaxyId)
-        }.body()
+        }
+        ensureAuthorized(response.status.value)
+        val root: JsonElement = response.body()
         val arrayElement = when (root) {
             is JsonObject -> root["chores"] ?: JsonArray(emptyList())
             is JsonArray -> root
@@ -321,7 +434,7 @@ class JlightApiClient(
         date: LocalDate = LocalDate.now(),
     ): Boolean {
         val creds = requireNotNull(tokenStore.getCredentials()) { "Watch is not paired with a JlightCalendar galaxy." }
-        val root: JsonElement = httpClient.patch("${creds.baseUrl}/api/chores") {
+        val response = httpClient.patch("${creds.baseUrl}/api/chores") {
             header(HttpHeaders.Authorization, "Bearer ${creds.agentPat}")
             contentType(ContentType.Application.Json)
             setBody(
@@ -332,7 +445,9 @@ class JlightApiClient(
                     date = date.toString(),
                 ),
             )
-        }.body()
+        }
+        ensureAuthorized(response.status.value)
+        val root: JsonElement = response.body()
         if (root is JsonObject) {
             root["completed"]?.jsonPrimitive?.booleanOrNull?.let { return it }
         }
@@ -341,10 +456,12 @@ class JlightApiClient(
 
     suspend fun fetchSharedLists(): List<SharedListItem> {
         val creds = requireNotNull(tokenStore.getCredentials()) { "Watch is not paired with a JlightCalendar galaxy." }
-        val root: JsonElement = httpClient.get("${creds.baseUrl}/api/lists") {
+        val response = httpClient.get("${creds.baseUrl}/api/lists") {
             header(HttpHeaders.Authorization, "Bearer ${creds.agentPat}")
             parameter("galaxyId", creds.galaxyId)
-        }.body()
+        }
+        ensureAuthorized(response.status.value)
+        val root: JsonElement = response.body()
         val arrayElement = when (root) {
             is JsonObject -> root["items"] ?: JsonArray(emptyList())
             is JsonArray -> root
@@ -359,11 +476,18 @@ class JlightApiClient(
         completed: Boolean,
     ): Boolean {
         val creds = requireNotNull(tokenStore.getCredentials()) { "Watch is not paired with a JlightCalendar galaxy." }
-        httpClient.patch("${creds.baseUrl}/api/lists") {
+        val response = httpClient.patch("${creds.baseUrl}/api/lists") {
             header(HttpHeaders.Authorization, "Bearer ${creds.agentPat}")
             contentType(ContentType.Application.Json)
             setBody(ToggleCompletedRequestDto(id = itemId, completed = completed))
         }
+        ensureAuthorized(response.status.value)
         return completed
+    }
+
+    private fun ensureAuthorized(statusCode: Int) {
+        if (statusCode == 401 || statusCode == 403) {
+            throw JlightUnauthorizedException(statusCode = statusCode)
+        }
     }
 }

@@ -146,6 +146,7 @@ object WallClockRecurrenceExpander {
             memberIds = memberIds.ifEmpty { listOf("Everyone") },
             isRecurring = isRecurring,
             location = location,
+            description = description,
         )
 
     private enum class Frequency {

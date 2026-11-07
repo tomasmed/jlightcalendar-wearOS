@@ -18,6 +18,19 @@ object JlightOslColors {
     val FluorescentRose = Color(0xFFFB7185)
     val TextPrimary = Color(0xFFF8FAFC)
     val TextSecondary = Color(0xFF94A3B8)
+
+    private val MemberPalette = listOf(
+        FluorescentCyan,
+        FluorescentEmerald,
+        FluorescentAmber,
+        FluorescentRose,
+    )
+
+    fun colorForMember(memberId: String): Color {
+        if (memberId.equals("Everyone", ignoreCase = true)) return FluorescentCyan
+        val index = (memberId.hashCode() and Int.MAX_VALUE) % MemberPalette.size
+        return MemberPalette[index]
+    }
 }
 
 private val JlightWearColorScheme = ColorScheme(

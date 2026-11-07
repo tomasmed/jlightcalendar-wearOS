@@ -34,6 +34,7 @@ data class EventOccurrence(
     val memberIds: List<String> = listOf("Everyone"),
     val isRecurring: Boolean = false,
     val location: String? = null,
+    val description: String? = null,
 )
 
 /**
@@ -68,6 +69,7 @@ sealed interface PairingSessionState {
 
     data class AwaitingClaim(
         val deviceCode: String,
+        val userCode: String,
         val claimUrl: String,
         val expiresAtIso: String,
     ) : PairingSessionState
