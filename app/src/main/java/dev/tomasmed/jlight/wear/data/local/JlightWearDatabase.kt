@@ -150,6 +150,9 @@ interface JlightWearDao {
     @Query("SELECT * FROM chores WHERE galaxyId = :galaxyId ORDER BY completed ASC, title ASC")
     fun observeChores(galaxyId: String): Flow<List<ChoreEntity>>
 
+    @Query("SELECT * FROM chores WHERE galaxyId = :galaxyId ORDER BY completed ASC, title ASC")
+    suspend fun getChoresSnapshot(galaxyId: String): List<ChoreEntity>
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsertChores(chores: List<ChoreEntity>)
 
@@ -158,6 +161,9 @@ interface JlightWearDao {
 
     @Query("SELECT * FROM shared_lists WHERE galaxyId = :galaxyId ORDER BY completed ASC, text ASC")
     fun observeListItems(galaxyId: String): Flow<List<ListItemEntity>>
+
+    @Query("SELECT * FROM shared_lists WHERE galaxyId = :galaxyId ORDER BY completed ASC, text ASC")
+    suspend fun getListItemsSnapshot(galaxyId: String): List<ListItemEntity>
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsertListItems(items: List<ListItemEntity>)

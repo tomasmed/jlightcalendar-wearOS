@@ -26,7 +26,7 @@ object QrCodeMatrixGenerator {
         val alignmentCenters: IntArray = intArrayOf(),
     )
 
-    // ECC Level L specifications for Versions 1 through 6 (up to 134 UTF-8 bytes)
+    // ECC Level L specifications for Versions 1 through 9 (up to 230 UTF-8 bytes)
     private val VERSION_SPECS = listOf(
         VersionSpec(version = 1, totalDataCodewords = 19, ecCodewordsPerBlock = 7, numBlocksGroup1 = 1, dataCodewordsGroup1 = 19),
         VersionSpec(version = 2, totalDataCodewords = 34, ecCodewordsPerBlock = 10, numBlocksGroup1 = 1, dataCodewordsGroup1 = 34, alignmentCenters = intArrayOf(6, 18)),
@@ -34,21 +34,20 @@ object QrCodeMatrixGenerator {
         VersionSpec(version = 4, totalDataCodewords = 80, ecCodewordsPerBlock = 20, numBlocksGroup1 = 1, dataCodewordsGroup1 = 80, alignmentCenters = intArrayOf(6, 26)),
         VersionSpec(version = 5, totalDataCodewords = 108, ecCodewordsPerBlock = 26, numBlocksGroup1 = 1, dataCodewordsGroup1 = 108, alignmentCenters = intArrayOf(6, 30)),
         VersionSpec(version = 6, totalDataCodewords = 136, ecCodewordsPerBlock = 18, numBlocksGroup1 = 2, dataCodewordsGroup1 = 68, alignmentCenters = intArrayOf(6, 34)),
+        VersionSpec(version = 7, totalDataCodewords = 156, ecCodewordsPerBlock = 20, numBlocksGroup1 = 2, dataCodewordsGroup1 = 78, alignmentCenters = intArrayOf(6, 22, 38)),
+        VersionSpec(version = 8, totalDataCodewords = 194, ecCodewordsPerBlock = 24, numBlocksGroup1 = 2, dataCodewordsGroup1 = 97, alignmentCenters = intArrayOf(6, 24, 42)),
+        VersionSpec(version = 9, totalDataCodewords = 232, ecCodewordsPerBlock = 30, numBlocksGroup1 = 2, dataCodewordsGroup1 = 116, alignmentCenters = intArrayOf(6, 26, 46)),
     )
 
     fun encode(payload: String): QrMatrix {
         val bytes = payload.encodeToByteArray()
         require(bytes.isNotEmpty()) { "QR payload must not be empty." }
 
-        val spec = VERSION_SPECS.firstOrNull { bytes.size + 3 <= it.totalDataCodewords }
-            ?: VERSION_SPECS.last()
-        val usableBytes = if (bytes.size + 3 > spec.totalDataCodewords) {
-            bytes.copyOf(spec.totalDataCodewords - 3)
-        } else {
-            bytes
+        val spec = requireNotNull(VERSION_SPECS.firstOrNull { bytes.size + 2 <= it.totalDataCodewords }) {
+            "QR payload length (${bytes.size} bytes) exceeds maximum supported capacity (230 bytes)."
         }
 
-        val dataCodewords = buildDataCodewords(usableBytes, spec.totalDataCodewords)
+        val dataCodewords = buildDataCodewords(bytes, spec.totalDataCodewords)
         val finalBitStream = buildInterleavedBitStream(dataCodewords, spec)
         val size = 17 + 4 * spec.version
         val modules = Array(size) { BooleanArray(size) }
@@ -187,6 +186,22 @@ object QrCodeMatrixGenerator {
             setFunctionModule(modules, isFunction, size - 1 - i, 8, false)
         }
         setFunctionModule(modules, isFunction, size - 8, 8, true)
+
+        // Draw 18-bit version information blocks for Versions 7..9 (ISO/IEC 18004 Annex D)
+        if (spec.version >= 7) {
+            var rem = spec.version
+            repeat(12) {
+                rem = (rem shl 1) xor ((rem ushr 11) * 0x1F25)
+            }
+            val versionBits = (spec.version shl 12) or rem
+            for (i in 0 until 18) {
+                val dark = ((versionBits ushr i) and 1) != 0
+                val a = size - 11 + (i % 3)
+                val b = i / 3
+                setFunctionModule(modules, isFunction, a, b, dark)
+                setFunctionModule(modules, isFunction, b, a, dark)
+            }
+        }
     }
 
     private fun drawFinderPattern(

@@ -398,6 +398,175 @@ class JlightApiClientTest {
         assertEquals(1, fakeDao.eventsState.value.size)
     }
 
+    @Test
+    fun `HTTP 500 server error during sync preserves existing offline Room cache and does not unpair`() = runTest {
+        val tokenStore = InMemoryAuthTokenStore(
+            StoredAuthCredentials(
+                baseUrl = "https://jlight.example.com",
+                galaxyId = "galaxy-real",
+                agentPat = "jlight_ag_valid_pat",
+            ),
+        )
+        val fakeDao = FakeJlightWearDao()
+        fakeDao.upsertEvents(
+            listOf(
+                EventEntity(
+                    id = "evt-cached-1",
+                    galaxyId = "galaxy-real",
+                    title = "Cached Offline Dentist",
+                    dateIso = "2026-11-07",
+                    timeIso = "09:00",
+                    endDateIso = null,
+                    endTimeIso = "10:00",
+                    memberIdsCsv = "Leo",
+                    rrule = null,
+                    exdatesCsv = "",
+                    location = null,
+                    description = null,
+                ),
+            ),
+        )
+
+        val mockEngine = MockEngine {
+            respond(
+                content = """{"error":"Failed to fetch events"}""",
+                status = HttpStatusCode.InternalServerError,
+                headers = headersOf(HttpHeaders.ContentType, "application/json"),
+            )
+        }
+
+        val repo = OfflineFirstJlightRepository(
+            tokenStore = tokenStore,
+            apiClient = JlightApiClient(tokenStore, mockEngine),
+            wearDao = fakeDao,
+        )
+
+        val syncResult = repo.syncWithRemote()
+        assertTrue(syncResult.isFailure)
+        // Credentials must remain intact (500 is transient, not 401/403)
+        assertEquals("galaxy-real", tokenStore.getCredentials()?.galaxyId)
+        // Offline Room cache must NOT be wiped!
+        assertEquals(1, fakeDao.eventsState.value.size)
+        assertEquals("Cached Offline Dentist", fakeDao.eventsState.value.single().title)
+    }
+
+    @Test
+    fun `expired or denied device handshake resets state to Unpaired and toggling Room-backed chores preserves title`() = runTest {
+        val tokenStore = InMemoryAuthTokenStore()
+        val fakeDao = FakeJlightWearDao()
+
+        val mockEngine = MockEngine { request ->
+            when {
+                request.url.encodedPath == "/api/agent/connect" && request.method == HttpMethod.Post -> {
+                    val bodyText = request.body.toByteArray().decodeToString()
+                    if (bodyText.contains("GLX-8P9A-2M4K")) {
+                        respond(
+                            content = """
+                                {
+                                  "status": "approved",
+                                  "token": "jlight_ag_spokenjoin0123456789abcdef0123456789",
+                                  "galaxyId": "galaxy-spoken"
+                                }
+                            """.trimIndent(),
+                            status = HttpStatusCode.OK,
+                            headers = headersOf(HttpHeaders.ContentType, "application/json"),
+                        )
+                    } else {
+                        respond(
+                            content = """
+                                {
+                                  "deviceCode": "dvc_expiring",
+                                  "userCode": "BOT-EXP1-0000",
+                                  "verificationUri": "https://jlight.example.com/?claimBot=BOT-EXP1-0000",
+                                  "expiresIn": 900
+                                }
+                            """.trimIndent(),
+                            status = HttpStatusCode.OK,
+                            headers = headersOf(HttpHeaders.ContentType, "application/json"),
+                        )
+                    }
+                }
+                request.url.encodedPath == "/api/agent/connect" && request.method == HttpMethod.Get -> {
+                    respond(
+                        content = """{"error":"Handshake session has expired."}""",
+                        status = HttpStatusCode.Gone,
+                        headers = headersOf(HttpHeaders.ContentType, "application/json"),
+                    )
+                }
+                request.url.encodedPath == "/api/chores" && request.method == HttpMethod.Patch -> {
+                    respond(
+                        content = """{"success":true,"completed":true}""",
+                        status = HttpStatusCode.OK,
+                        headers = headersOf(HttpHeaders.ContentType, "application/json"),
+                    )
+                }
+                else -> error("Unexpected request: ${request.url}")
+            }
+        }
+
+        val repo = OfflineFirstJlightRepository(
+            tokenStore = tokenStore,
+            apiClient = JlightApiClient(tokenStore, mockEngine),
+            wearDao = fakeDao,
+            initialEvents = listOf(
+                dev.tomasmed.jlight.wear.domain.model.CalendarEvent(
+                    id = "demo-evt",
+                    galaxyId = "home-galaxy",
+                    title = "Demo Sample Event",
+                    date = LocalDate.of(2026, 11, 7),
+                ),
+            ),
+        )
+        val viewModel = dev.tomasmed.jlight.wear.ui.screens.PairingViewModel(
+            repository = repo,
+            baseUrl = "https://jlight.example.com",
+        )
+
+        viewModel.startDeviceCodeHandshake().getOrThrow()
+        assertTrue(repo.observePairingState().first() is PairingSessionState.AwaitingClaim)
+
+        // Polling an expired (410 Gone) code must transition state back to Unpaired so 3s polling stops
+        val expiredPoll = viewModel.pollDeviceCodeStatus("dvc_expiring")
+        assertTrue(expiredPoll.isFailure)
+        assertEquals(PairingSessionState.Unpaired, repo.observePairingState().first())
+        assertTrue(viewModel.statusMessage.value.orEmpty().contains("410"))
+
+        // Pair via spoken transcript with "dash" words
+        val pairResult = viewModel.pairWithSpokenJoinCode("glx dash 8p9a dash 2m4k")
+        assertTrue(pairResult.isSuccess)
+        assertEquals(
+            PairingSessionState.Paired(galaxyId = "galaxy-spoken", agentName = "Galaxy Watch"),
+            repo.observePairingState().first(),
+        )
+
+        // Paired galaxy with 0 events in Room must NOT leak "home-galaxy" demo sample events
+        val pairedOccurrences = repo.observeOccurrences(
+            windowStart = LocalDate.of(2026, 11, 7),
+            windowEnd = LocalDate.of(2026, 11, 8),
+        ).first()
+        assertTrue("Paired empty galaxy must not leak demo events", pairedOccurrences.isEmpty())
+
+        // Pre-populate Room DAO directly (simulating process restart before syncWithRemote)
+        fakeDao.upsertChores(
+            listOf(
+                ChoreEntity(
+                    id = "chore-room-only",
+                    galaxyId = "galaxy-spoken",
+                    title = "Walk Java the Dog",
+                    memberId = "Maya",
+                    completed = false,
+                    stars = 4,
+                    frequency = "daily",
+                ),
+            ),
+        )
+        val toggled = repo.toggleChoreCompleted("chore-room-only", true).getOrThrow()
+        assertEquals("Walk Java the Dog", toggled.title)
+        assertEquals("Maya", toggled.memberId)
+        assertEquals(4, toggled.stars)
+        assertTrue(toggled.completed)
+    }
+
     private class FakeJlightWearDao : JlightWearDao {
         val eventsState = MutableStateFlow<List<EventEntity>>(emptyList())
         val choresState = MutableStateFlow<List<ChoreEntity>>(emptyList())
@@ -417,6 +586,8 @@ class JlightApiClientTest {
 
         override fun observeChores(galaxyId: String): Flow<List<ChoreEntity>> = choresState
 
+        override suspend fun getChoresSnapshot(galaxyId: String): List<ChoreEntity> = choresState.value
+
         override suspend fun upsertChores(chores: List<ChoreEntity>) {
             choresState.value = chores
         }
@@ -426,6 +597,8 @@ class JlightApiClientTest {
         }
 
         override fun observeListItems(galaxyId: String): Flow<List<ListItemEntity>> = listsState
+
+        override suspend fun getListItemsSnapshot(galaxyId: String): List<ListItemEntity> = listsState.value
 
         override suspend fun upsertListItems(items: List<ListItemEntity>) {
             listsState.value = items

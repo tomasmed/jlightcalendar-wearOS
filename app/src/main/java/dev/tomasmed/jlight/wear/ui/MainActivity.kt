@@ -5,10 +5,13 @@ import android.content.Intent
 import android.os.Bundle
 import android.speech.RecognizerIntent
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
+import androidx.compose.foundation.focusable
+import androidx.compose.foundation.gestures.scrollBy
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -31,6 +34,9 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.input.rotary.onRotaryScrollEvent
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -52,6 +58,7 @@ import dev.tomasmed.jlight.wear.domain.voice.VoiceEventTranscriptParser
 import dev.tomasmed.jlight.wear.ui.screens.ChoresChecklistScreen
 import dev.tomasmed.jlight.wear.ui.screens.EventDetailScreen
 import dev.tomasmed.jlight.wear.ui.screens.PairingScreen
+import dev.tomasmed.jlight.wear.ui.screens.PairingViewModel
 import dev.tomasmed.jlight.wear.ui.theme.JlightOslColors
 import dev.tomasmed.jlight.wear.ui.theme.JlightWearTheme
 import kotlinx.coroutines.launch
@@ -71,23 +78,31 @@ private enum class VoiceInputMode {
 }
 
 class MainActivity : ComponentActivity() {
+    private var deepLinkOccurrenceIdState by mutableStateOf<String?>(null)
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         JlightPeriodicSyncJobService.schedulePeriodicSync(this)
         val repository = WearSyncCoordinator.provideRepository(this)
-        val deepLinkOccurrenceId = intent?.getStringExtra(EXTRA_OCCURRENCE_ID)
+        deepLinkOccurrenceIdState = intent?.getStringExtra(EXTRA_OCCURRENCE_ID)
 
         setContent {
             JlightWearTheme {
                 JlightWearRootApp(
                     repository = repository,
-                    deepLinkOccurrenceId = deepLinkOccurrenceId,
+                    deepLinkOccurrenceId = deepLinkOccurrenceIdState,
                     onSurfaceRefreshRequested = {
                         WearSyncCoordinator.requestSurfaceUpdates(this@MainActivity)
                     },
                 )
             }
         }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        deepLinkOccurrenceIdState = intent.getStringExtra(EXTRA_OCCURRENCE_ID)
     }
 
     companion object {
@@ -104,10 +119,17 @@ fun JlightWearRootApp(
 ) {
     val scope = rememberCoroutineScope()
     val today = remember { LocalDate.now() }
-    val pairingState by repository.observePairingState().collectAsState(initial = PairingSessionState.Unpaired)
+    val pairingViewModel = remember(repository) {
+        PairingViewModel(
+            repository = repository,
+            baseUrl = MainActivity.DEFAULT_HOST_URL,
+        )
+    }
+    val pairingState by pairingViewModel.observePairingState().collectAsState(initial = PairingSessionState.Unpaired)
+    val pairingStatusMessage by pairingViewModel.statusMessage.collectAsState()
     val occurrences by repository.observeOccurrences(
         windowStart = today,
-        windowEnd = today.plusDays(1),
+        windowEnd = today.plusDays(2),
     ).collectAsState(initial = emptyList())
     val chores by repository.observeChores().collectAsState(initial = emptyList())
     val sharedLists by repository.observeSharedLists().collectAsState(initial = emptyList())
@@ -117,7 +139,11 @@ fun JlightWearRootApp(
     var voiceMode by remember { mutableStateOf(VoiceInputMode.CREATE_EVENT) }
     var consumedDeepLink by remember { mutableStateOf<String?>(null) }
 
-    // Navigate directly to EventDetailScreen when deep-linked from AgendaTileService
+    BackHandler(enabled = currentDestination !is WearDestination.Agenda) {
+        currentDestination = WearDestination.Agenda
+    }
+
+    // Navigate directly to EventDetailScreen when deep-linked from AgendaTileService or Complication
     LaunchedEffect(deepLinkOccurrenceId, occurrences) {
         if (!deepLinkOccurrenceId.isNullOrBlank() && consumedDeepLink != deepLinkOccurrenceId) {
             val target = occurrences.firstOrNull {
@@ -161,22 +187,18 @@ fun JlightWearRootApp(
                                 onSurfaceRefreshRequested()
                                 "Added: ${parsed.title}"
                             } else {
-                                "Saved locally: ${parsed.title}"
+                                "Failed to add: ${parsed.title}"
                             }
                         }
 
                         VoiceInputMode.JOIN_CODE -> {
-                            val normalizedCode = spoken.uppercase().replace(" ", "-")
-                            val pairResult = repository.pairWithJoinCode(
-                                baseUrl = MainActivity.DEFAULT_HOST_URL,
-                                joinCode = normalizedCode,
-                            )
+                            val pairResult = pairingViewModel.pairWithSpokenJoinCode(spoken)
                             if (pairResult.isSuccess) {
                                 statusMessage = "Paired with galaxy!"
                                 currentDestination = WearDestination.Agenda
                                 onSurfaceRefreshRequested()
                             } else {
-                                statusMessage = pairResult.exceptionOrNull()?.message ?: "Join code failed"
+                                statusMessage = pairingViewModel.statusMessage.value
                             }
                         }
                     }
@@ -259,24 +281,16 @@ fun JlightWearRootApp(
         is WearDestination.Pairing -> {
             PairingScreen(
                 pairingState = pairingState,
-                baseUrl = MainActivity.DEFAULT_HOST_URL,
-                statusMessage = statusMessage,
+                baseUrl = pairingViewModel.baseUrl,
+                statusMessage = pairingStatusMessage ?: statusMessage,
                 onStartDeviceHandshake = {
                     scope.launch {
-                        val res = repository.initiateDevicePairing(MainActivity.DEFAULT_HOST_URL)
-                        if (res.isFailure) {
-                            statusMessage = res.exceptionOrNull()?.message ?: "Handshake failed"
-                        } else {
-                            statusMessage = null
-                        }
+                        pairingViewModel.startDeviceCodeHandshake()
                     }
                 },
                 onPollDeviceHandshake = { deviceCode ->
                     scope.launch {
-                        val res = repository.pollDevicePairing(
-                            baseUrl = MainActivity.DEFAULT_HOST_URL,
-                            deviceCode = deviceCode,
-                        )
+                        val res = pairingViewModel.pollDeviceCodeStatus(deviceCode)
                         if (res.getOrNull() is PairingSessionState.Paired) {
                             statusMessage = "Approved!"
                             currentDestination = WearDestination.Agenda
@@ -311,6 +325,8 @@ fun AgendaWatchScreen(
     onSyncRequested: () -> Unit = {},
 ) {
     val listState = rememberScalingLazyListState()
+    val coroutineScope = rememberCoroutineScope()
+    val focusRequester = remember { FocusRequester() }
     val timeFormatter = remember { DateTimeFormatter.ofPattern("h:mm a") }
     val todayOccurrences = remember(occurrences, today) {
         occurrences.filter { it.occurrenceDate == today }
@@ -319,11 +335,23 @@ fun AgendaWatchScreen(
         occurrences.filter { it.occurrenceDate == today.plusDays(1) }
     }
 
+    LaunchedEffect(Unit) {
+        runCatching { focusRequester.requestFocus() }
+    }
+
     ScalingLazyColumn(
         state = listState,
         modifier = modifier
             .fillMaxSize()
-            .background(JlightOslColors.TrueBlack),
+            .background(JlightOslColors.TrueBlack)
+            .onRotaryScrollEvent { event ->
+                coroutineScope.launch {
+                    listState.scrollBy(event.verticalScrollPixels)
+                }
+                true
+            }
+            .focusRequester(focusRequester)
+            .focusable(),
         contentPadding = PaddingValues(horizontal = 14.dp, vertical = 28.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp),
         horizontalAlignment = Alignment.CenterHorizontally,

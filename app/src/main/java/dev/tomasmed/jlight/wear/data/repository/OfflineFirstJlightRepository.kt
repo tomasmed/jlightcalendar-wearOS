@@ -7,6 +7,7 @@ import dev.tomasmed.jlight.wear.data.local.EventEntity
 import dev.tomasmed.jlight.wear.data.local.JlightWearDao
 import dev.tomasmed.jlight.wear.data.local.ListItemEntity
 import dev.tomasmed.jlight.wear.data.remote.JlightApiClient
+import dev.tomasmed.jlight.wear.data.remote.JlightHandshakeException
 import dev.tomasmed.jlight.wear.data.remote.JlightUnauthorizedException
 import dev.tomasmed.jlight.wear.domain.model.CalendarEvent
 import dev.tomasmed.jlight.wear.domain.model.ChoreItem
@@ -54,7 +55,9 @@ class OfflineFirstJlightRepository(
             pairingState.flatMapLatest { state ->
                 when (state) {
                     is PairingSessionState.Paired -> wearDao.observeEvents(state.galaxyId).map { entities ->
-                        entities.map(EventEntity::toDomain).ifEmpty { cachedEvents.value }
+                        entities.map(EventEntity::toDomain).ifEmpty {
+                            cachedEvents.value.filter { it.galaxyId == state.galaxyId }
+                        }
                     }
                     else -> cachedEvents
                 }
@@ -77,7 +80,9 @@ class OfflineFirstJlightRepository(
         return pairingState.flatMapLatest { state ->
             when (state) {
                 is PairingSessionState.Paired -> wearDao.observeChores(state.galaxyId).map { entities ->
-                    entities.map(ChoreEntity::toDomain).ifEmpty { cachedChores.value }
+                    entities.map(ChoreEntity::toDomain).ifEmpty {
+                        cachedChores.value.filter { it.galaxyId == state.galaxyId }
+                    }
                 }
                 else -> flowOf(emptyList())
             }
@@ -89,7 +94,9 @@ class OfflineFirstJlightRepository(
         return pairingState.flatMapLatest { state ->
             when (state) {
                 is PairingSessionState.Paired -> wearDao.observeListItems(state.galaxyId).map { entities ->
-                    entities.map(ListItemEntity::toDomain).ifEmpty { cachedLists.value }
+                    entities.map(ListItemEntity::toDomain).ifEmpty {
+                        cachedLists.value.filter { it.galaxyId == state.galaxyId }
+                    }
                 }
                 else -> flowOf(emptyList())
             }
@@ -126,7 +133,7 @@ class OfflineFirstJlightRepository(
         deviceCode: String,
         agentName: String,
     ): Result<PairingSessionState> =
-        runCatching {
+        try {
             val response = apiClient.pollDeviceCodeStatus(baseUrl = baseUrl, deviceCode = deviceCode)
             if (response.status.equals("approved", ignoreCase = true) && !response.token.isNullOrBlank()) {
                 val resolvedGalaxyId = response.galaxyId?.takeIf { it.isNotBlank() } ?: "default"
@@ -143,10 +150,17 @@ class OfflineFirstJlightRepository(
                     agentName = agentName,
                 )
                 pairingState.value = paired
-                paired
+                Result.success(paired)
             } else {
-                pairingState.value
+                Result.success(pairingState.value)
             }
+        } catch (handshakeEx: JlightHandshakeException) {
+            if (handshakeEx.statusCode == 403 || handshakeEx.statusCode == 404 || handshakeEx.statusCode == 410) {
+                pairingState.value = PairingSessionState.Unpaired
+            }
+            Result.failure(handshakeEx)
+        } catch (t: Throwable) {
+            Result.failure(t)
         }
 
     override suspend fun pairWithJoinCode(
@@ -243,18 +257,26 @@ class OfflineFirstJlightRepository(
         completed: Boolean,
     ): Result<ChoreItem> =
         runWithAuthGuard {
+            val galaxyId = tokenStore.getCredentials()?.galaxyId ?: "default"
             val remoteCompleted = apiClient.toggleChore(choreId, completed)
+            val existingFromDao = wearDao
+                ?.getChoresSnapshot(galaxyId)
+                ?.firstOrNull { it.id == choreId }
+                ?.toDomain()
             val current = cachedChores.value.firstOrNull { it.id == choreId }
+                ?: existingFromDao
                 ?: ChoreItem(
                     id = choreId,
-                    galaxyId = tokenStore.getCredentials()?.galaxyId ?: "default",
+                    galaxyId = galaxyId,
                     title = "",
                     memberId = "Everyone",
                     completed = remoteCompleted,
                 )
             val updated = current.copy(completed = remoteCompleted)
-            cachedChores.value = cachedChores.value.map { existing ->
-                if (existing.id == choreId) updated else existing
+            cachedChores.value = if (cachedChores.value.any { it.id == choreId }) {
+                cachedChores.value.map { existing -> if (existing.id == choreId) updated else existing }
+            } else {
+                cachedChores.value + updated
             }
             wearDao?.upsertChores(listOf(ChoreEntity.fromDomain(updated)))
             updated
@@ -265,17 +287,25 @@ class OfflineFirstJlightRepository(
         completed: Boolean,
     ): Result<SharedListItem> =
         runWithAuthGuard {
+            val galaxyId = tokenStore.getCredentials()?.galaxyId ?: "default"
             val remoteCompleted = apiClient.toggleListItem(itemId, completed)
+            val existingFromDao = wearDao
+                ?.getListItemsSnapshot(galaxyId)
+                ?.firstOrNull { it.id == itemId }
+                ?.toDomain()
             val current = cachedLists.value.firstOrNull { it.id == itemId }
+                ?: existingFromDao
                 ?: SharedListItem(
                     id = itemId,
-                    galaxyId = tokenStore.getCredentials()?.galaxyId ?: "default",
+                    galaxyId = galaxyId,
                     text = "",
                     completed = remoteCompleted,
                 )
             val target = current.copy(completed = remoteCompleted)
-            cachedLists.value = cachedLists.value.map { existing ->
-                if (existing.id == itemId) target else existing
+            cachedLists.value = if (cachedLists.value.any { it.id == itemId }) {
+                cachedLists.value.map { existing -> if (existing.id == itemId) target else existing }
+            } else {
+                cachedLists.value + target
             }
             wearDao?.upsertListItems(listOf(ListItemEntity.fromDomain(target)))
             target

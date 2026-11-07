@@ -17,12 +17,22 @@ object VoiceEventTranscriptParser {
     )
 
     private val TIME_REGEX = Regex(
-        pattern = """\b(?:at\s+)?(\d{1,2})(?::(\d{2}))?\s*(a\.?m\.?|p\.?m\.?)\b""",
+        pattern = """\b(?:at\s+)?(\d{1,2})(?::(\d{2}))?\s*(a\.?m\.?|p\.?m\.?)(?!\w)""",
         option = RegexOption.IGNORE_CASE,
     )
 
     private val TWENTY_FOUR_HOUR_REGEX = Regex(
         pattern = """\bat\s+([01]?\d|2[0-3]):([0-5]\d)\b""",
+        option = RegexOption.IGNORE_CASE,
+    )
+
+    private val NOON_MIDNIGHT_REGEX = Regex(
+        pattern = """\b(?:at\s+)?(noon|midnight)\b""",
+        option = RegexOption.IGNORE_CASE,
+    )
+
+    private val TRAILING_PREPOSITION_REGEX = Regex(
+        pattern = """\s+\b(?:at|on)$""",
         option = RegexOption.IGNORE_CASE,
     )
 
@@ -73,14 +83,20 @@ object VoiceEventTranscriptParser {
                 val minute = h24Match.groupValues[2].toIntOrNull() ?: 0
                 parsedTime = LocalTime.of(hour.coerceIn(0, 23), minute.coerceIn(0, 59))
                 working = working.removeRange(h24Match.range)
+            } else {
+                val noonMidnightMatch = NOON_MIDNIGHT_REGEX.find(working)
+                if (noonMidnightMatch != null) {
+                    val token = noonMidnightMatch.groupValues[1].lowercase(Locale.US)
+                    parsedTime = if (token == "noon") LocalTime.NOON else LocalTime.MIDNIGHT
+                    working = working.removeRange(noonMidnightMatch.range)
+                }
             }
         }
 
         val cleanedTitle = working
             .replace(Regex("""\s+"""), " ")
             .trim()
-            .removeSuffix("at")
-            .removeSuffix("on")
+            .replace(TRAILING_PREPOSITION_REGEX, "")
             .trim()
             .ifEmpty { raw }
 

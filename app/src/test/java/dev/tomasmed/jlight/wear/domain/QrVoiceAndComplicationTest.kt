@@ -32,10 +32,16 @@ class QrVoiceAndComplicationTest {
         // Separator around top-left finder pattern must be light
         assertFalse(matrix.isDark(7, 0))
         assertFalse(matrix.isDark(0, 7))
+
+        // Longer self-hosted tunnel URL (>134 bytes) encodes cleanly using Version 7..9 (size = 45..53)
+        val longUrl = "https://my-family-kiosk-long-subdomain.trycloudflare.com/household/connect?claimBot=BOT-7F9A-22C1&source=galaxy-watch-ultra-wearos-companion-v1"
+        val v7Matrix = QrCodeMatrixGenerator.encode(longUrl)
+        assertTrue(v7Matrix.size >= 45)
+        assertTrue(v7Matrix.isDark(0, 0))
     }
 
     @Test
-    fun `VoiceEventTranscriptParser extracts wall-clock date and time from spoken transcripts`() {
+    fun `VoiceEventTranscriptParser extracts wall-clock date and time without truncating words ending in at or on`() {
         val refDate = LocalDate.of(2026, 11, 7)
 
         val tomorrowPm = VoiceEventTranscriptParser.parse(
@@ -46,13 +52,28 @@ class QrVoiceAndComplicationTest {
         assertEquals(LocalDate.of(2026, 11, 8), tomorrowPm.date)
         assertEquals(LocalTime.of(15, 30), tomorrowPm.startTime)
 
-        val todayAm = VoiceEventTranscriptParser.parse(
-            transcript = "Soccer practice today at 10am",
+        val catEvent = VoiceEventTranscriptParser.parse(
+            transcript = "Feed the cat tomorrow at 5pm",
             referenceDate = refDate,
         )
-        assertEquals("Soccer practice", todayAm.title)
-        assertEquals(refDate, todayAm.date)
-        assertEquals(LocalTime.of(10, 0), todayAm.startTime)
+        assertEquals("Feed the cat", catEvent.title)
+        assertEquals(LocalDate.of(2026, 11, 8), catEvent.date)
+        assertEquals(LocalTime.of(17, 0), catEvent.startTime)
+
+        val lessonEvent = VoiceEventTranscriptParser.parse(
+            transcript = "Piano lesson today at 4:15 p.m.",
+            referenceDate = refDate,
+        )
+        assertEquals("Piano lesson", lessonEvent.title)
+        assertEquals(refDate, lessonEvent.date)
+        assertEquals(LocalTime.of(16, 15), lessonEvent.startTime)
+
+        val noonEvent = VoiceEventTranscriptParser.parse(
+            transcript = "Family lunch at noon",
+            referenceDate = refDate,
+        )
+        assertEquals("Family lunch", noonEvent.title)
+        assertEquals(LocalTime.NOON, noonEvent.startTime)
 
         val allDay = VoiceEventTranscriptParser.parse(
             transcript = "Grandma Birthday",

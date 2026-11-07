@@ -142,6 +142,7 @@ data class RemoteChoreDto(
     val galaxyId: String = "default",
     val title: String,
     val memberId: String = "Everyone",
+    val memberName: String? = null,
     val completed: Boolean = false,
     val points: Int? = null,
     val stars: Int? = null,
@@ -153,7 +154,7 @@ data class RemoteChoreDto(
             id = id,
             galaxyId = if (galaxyId == "default") fallbackGalaxyId else galaxyId,
             title = title,
-            memberId = memberId,
+            memberId = memberName?.takeIf { it.isNotBlank() } ?: memberId,
             completed = completed,
             stars = points ?: stars ?: 1,
             frequency = recurrenceType ?: frequency,
@@ -218,6 +219,15 @@ class JlightUnauthorizedException(
  * Thrown when a device-code handshake expires (`410 Gone`) or is denied (`403 Forbidden`).
  */
 class JlightHandshakeException(
+    val statusCode: Int,
+    message: String,
+) : IllegalStateException(message)
+
+/**
+ * Thrown when an upstream JlightCalendar endpoint returns a non-auth HTTP error (`>= 400`),
+ * preventing `syncWithRemote()` from wiping the local Room cache on transient `500`/`502`/`503` errors.
+ */
+class JlightApiException(
     val statusCode: Int,
     message: String,
 ) : IllegalStateException(message)
@@ -300,12 +310,13 @@ class JlightApiClient(
         agentName: String = "Galaxy Watch",
     ): AgentConnectResponseDto {
         val cleanBase = baseUrl.trimEnd('/')
+        val normalizedJoinCode = normalizeJoinCode(joinCode)
         val response = httpClient.post("$cleanBase/api/agent/connect") {
             contentType(ContentType.Application.Json)
             setBody(
                 AgentConnectRequestDto(
                     agentName = agentName,
-                    joinCode = joinCode.trim(),
+                    joinCode = normalizedJoinCode,
                 ),
             )
         }
@@ -326,7 +337,7 @@ class JlightApiClient(
         val response = httpClient.get("$cleanBase/api/agent/connect") {
             parameter("deviceCode", deviceCode)
         }
-        if (response.status.value == 410 || response.status.value == 403 || response.status.value == 404) {
+        if (response.status.value >= 400) {
             throw JlightHandshakeException(
                 statusCode = response.status.value,
                 message = "Device handshake ended with HTTP ${response.status.value}.",
@@ -341,7 +352,7 @@ class JlightApiClient(
             header(HttpHeaders.Authorization, "Bearer ${creds.agentPat}")
             parameter("galaxyId", creds.galaxyId)
         }
-        ensureAuthorized(response.status.value)
+        ensureSuccess(response.status.value, "GET /api/events")
         val root: JsonElement = response.body()
         val arrayElement = when (root) {
             is JsonObject -> root["events"] ?: JsonArray(emptyList())
@@ -391,7 +402,7 @@ class JlightApiClient(
                 ),
             )
         }
-        ensureAuthorized(response.status.value)
+        ensureSuccess(response.status.value, "POST /api/events")
         val root: JsonElement = response.body()
         val eventElement = (root as? JsonObject)?.get("event") ?: root
         if (eventElement is JsonObject && eventElement.containsKey("id")) {
@@ -411,13 +422,14 @@ class JlightApiClient(
         )
     }
 
-    suspend fun fetchChores(): List<ChoreItem> {
+    suspend fun fetchChores(date: LocalDate = LocalDate.now()): List<ChoreItem> {
         val creds = requireNotNull(tokenStore.getCredentials()) { "Watch is not paired with a JlightCalendar galaxy." }
         val response = httpClient.get("${creds.baseUrl}/api/chores") {
             header(HttpHeaders.Authorization, "Bearer ${creds.agentPat}")
             parameter("galaxyId", creds.galaxyId)
+            parameter("date", date.toString())
         }
-        ensureAuthorized(response.status.value)
+        ensureSuccess(response.status.value, "GET /api/chores")
         val root: JsonElement = response.body()
         val arrayElement = when (root) {
             is JsonObject -> root["chores"] ?: JsonArray(emptyList())
@@ -446,7 +458,7 @@ class JlightApiClient(
                 ),
             )
         }
-        ensureAuthorized(response.status.value)
+        ensureSuccess(response.status.value, "PATCH /api/chores")
         val root: JsonElement = response.body()
         if (root is JsonObject) {
             root["completed"]?.jsonPrimitive?.booleanOrNull?.let { return it }
@@ -460,7 +472,7 @@ class JlightApiClient(
             header(HttpHeaders.Authorization, "Bearer ${creds.agentPat}")
             parameter("galaxyId", creds.galaxyId)
         }
-        ensureAuthorized(response.status.value)
+        ensureSuccess(response.status.value, "GET /api/lists")
         val root: JsonElement = response.body()
         val arrayElement = when (root) {
             is JsonObject -> root["items"] ?: JsonArray(emptyList())
@@ -481,13 +493,48 @@ class JlightApiClient(
             contentType(ContentType.Application.Json)
             setBody(ToggleCompletedRequestDto(id = itemId, completed = completed))
         }
-        ensureAuthorized(response.status.value)
+        ensureSuccess(response.status.value, "PATCH /api/lists")
         return completed
     }
 
-    private fun ensureAuthorized(statusCode: Int) {
+    private fun ensureSuccess(statusCode: Int, endpoint: String) {
         if (statusCode == 401 || statusCode == 403) {
             throw JlightUnauthorizedException(statusCode = statusCode)
+        }
+        if (statusCode >= 400) {
+            throw JlightApiException(
+                statusCode = statusCode,
+                message = "Upstream JlightCalendar request failed ($endpoint -> HTTP $statusCode).",
+            )
+        }
+    }
+
+    companion object {
+        /**
+         * Normalizes spoken or typed galaxy join codes (`GLX-XXXX-XXXX`, `GLX-XXXXX`, `CMT-XXXX-XXXX`, `CMT-XXXXX`),
+         * stripping spoken words like `"dash"`/`"hyphen"` to match upstream `normalizeJoinCode` (`src/db/schema.ts`).
+         */
+        fun normalizeJoinCode(rawInput: String): String {
+            val cleanedWords = rawInput
+                .trim()
+                .uppercase()
+                .replace(Regex("""\b(DASH|HYPHEN)\b"""), "-")
+            val stripped = cleanedWords.replace(Regex("""[^A-Z0-9]"""), "")
+            return when {
+                stripped.startsWith("CMT") && stripped.length == 11 ->
+                    "CMT-${stripped.substring(3, 7)}-${stripped.substring(7, 11)}"
+                stripped.startsWith("CMT") && stripped.length == 8 ->
+                    "CMT-${stripped.substring(3, 8)}"
+                stripped.startsWith("GLX") && stripped.length == 11 ->
+                    "GLX-${stripped.substring(3, 7)}-${stripped.substring(7, 11)}"
+                stripped.startsWith("GLX") && stripped.length == 8 ->
+                    "GLX-${stripped.substring(3, 8)}"
+                stripped.length == 8 && !stripped.startsWith("GLX") && !stripped.startsWith("CMT") ->
+                    "GLX-${stripped.substring(0, 4)}-${stripped.substring(4, 8)}"
+                stripped.length == 5 ->
+                    "GLX-$stripped"
+                else -> cleanedWords.replace(Regex("""\s+"""), "-")
+            }
         }
     }
 }
